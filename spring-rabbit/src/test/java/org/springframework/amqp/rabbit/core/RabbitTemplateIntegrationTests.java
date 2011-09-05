@@ -30,6 +30,7 @@ import org.junit.Test;
 
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessagePostProcessor;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.SingleConnectionFactory;
@@ -77,6 +78,21 @@ public class RabbitTemplateIntegrationTests {
 		}
 		// Now send the real message, and all should be well...
 		template.convertAndSend(ROUTE, "message");
+		String result = (String) template.receiveAndConvert(ROUTE);
+		assertEquals("message", result);
+		result = (String) template.receiveAndConvert(ROUTE);
+		assertEquals(null, result);
+	}
+
+	@Test
+	public void testSendAndReceiveWithPostProcessor() throws Exception {
+		template.convertAndSend(ROUTE, (Object)"message", new MessagePostProcessor() {
+			public Message postProcessMessage(Message message) throws AmqpException {
+				message.getMessageProperties().setContentType("text/other");
+				// message.getMessageProperties().setUserId("foo");
+				return message;
+			}
+		});
 		String result = (String) template.receiveAndConvert(ROUTE);
 		assertEquals("message", result);
 		result = (String) template.receiveAndConvert(ROUTE);
@@ -288,7 +304,7 @@ public class RabbitTemplateIntegrationTests {
 					Thread.sleep(100L);
 				}
 				assertNotNull("No message received", message);
-				template.send(message.getMessageProperties().getReplyTo().getRoutingKey(), message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
 				return message;
 			}
 
@@ -320,7 +336,7 @@ public class RabbitTemplateIntegrationTests {
 					Thread.sleep(100L);
 				}
 				assertNotNull("No message received", message);
-				template.send(message.getMessageProperties().getReplyTo().getRoutingKey(), message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
 				return message;
 			}
 
@@ -352,7 +368,7 @@ public class RabbitTemplateIntegrationTests {
 					Thread.sleep(100L);
 				}
 				assertNotNull("No message received", message);
-				template.send(message.getMessageProperties().getReplyTo().getRoutingKey(), message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
 				return message;
 			}
 
@@ -386,7 +402,7 @@ public class RabbitTemplateIntegrationTests {
 					Thread.sleep(100L);
 				}
 				assertNotNull("No message received", message);
-				template.send(message.getMessageProperties().getReplyTo().getRoutingKey(), message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
 				return (String) template.getMessageConverter().fromMessage(message);
 			}
 
@@ -415,7 +431,7 @@ public class RabbitTemplateIntegrationTests {
 					Thread.sleep(100L);
 				}
 				assertNotNull("No message received", message);
-				template.send(message.getMessageProperties().getReplyTo().getRoutingKey(), message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
 				return (String) template.getMessageConverter().fromMessage(message);
 			}
 
@@ -444,7 +460,7 @@ public class RabbitTemplateIntegrationTests {
 					Thread.sleep(100L);
 				}
 				assertNotNull("No message received", message);
-				template.send(message.getMessageProperties().getReplyTo().getRoutingKey(), message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
 				return (String) template.getMessageConverter().fromMessage(message);
 			}
 
@@ -456,6 +472,128 @@ public class RabbitTemplateIntegrationTests {
 		result = (String) template.receiveAndConvert(ROUTE);
 		assertEquals(null, result);
 	}
+
+	@Test
+	public void testAtomicSendAndReceiveWithConversionAndMessagePostProcessor() throws Exception {
+		final RabbitTemplate template = new RabbitTemplate(new CachingConnectionFactory());
+		template.setRoutingKey(ROUTE);
+		template.setQueue(ROUTE);
+		ExecutorService executor = Executors.newFixedThreadPool(1);
+		// Set up a consumer to respond to our producer
+		Future<String> received = executor.submit(new Callable<String>() {
+
+			public String call() throws Exception {
+				Message message = null;
+				for (int i = 0; i < 10; i++) {
+					message = template.receive();
+					if (message != null) {
+						break;
+					}
+					Thread.sleep(100L);
+				}
+				assertNotNull("No message received", message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
+				return (String) template.getMessageConverter().fromMessage(message);
+			}
+
+		});
+		String result = (String) template.convertSendAndReceive((Object) "message", new MessagePostProcessor() {
+			public Message postProcessMessage(Message message) throws AmqpException {
+				try {
+					byte[] newBody = new String(message.getBody(), "UTF-8").toUpperCase().getBytes("UTF-8");
+					return new Message(newBody, message.getMessageProperties());
+				}
+				catch (Exception e) {
+					throw new AmqpException("unexpected failure in test", e);
+				}
+			}
+		});
+		assertEquals("MESSAGE", received.get(1000, TimeUnit.MILLISECONDS));
+		assertEquals("MESSAGE", result);
+		// Message was consumed so nothing left on queue
+		result = (String) template.receiveAndConvert();
+		assertEquals(null, result);
+	}
+
+	@Test
+	public void testAtomicSendAndReceiveWithConversionAndMessagePostProcessorUsingRoutingKey() throws Exception {
+		ExecutorService executor = Executors.newFixedThreadPool(1);
+		// Set up a consumer to respond to our producer
+		Future<String> received = executor.submit(new Callable<String>() {
+
+			public String call() throws Exception {
+				Message message = null;
+				for (int i = 0; i < 10; i++) {
+					message = template.receive(ROUTE);
+					if (message != null) {
+						break;
+					}
+					Thread.sleep(100L);
+				}
+				assertNotNull("No message received", message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
+				return (String) template.getMessageConverter().fromMessage(message);
+			}
+
+		});
+		String result = (String) template.convertSendAndReceive(ROUTE, (Object) "message", new MessagePostProcessor() {
+			public Message postProcessMessage(Message message) throws AmqpException {
+				try {
+					byte[] newBody = new String(message.getBody(), "UTF-8").toUpperCase().getBytes("UTF-8");
+					return new Message(newBody, message.getMessageProperties());
+				}
+				catch (Exception e) {
+					throw new AmqpException("unexpected failure in test", e);
+				}
+			}
+		});
+		assertEquals("MESSAGE", received.get(1000, TimeUnit.MILLISECONDS));
+		assertEquals("MESSAGE", result);
+		// Message was consumed so nothing left on queue
+		result = (String) template.receiveAndConvert(ROUTE);
+		assertEquals(null, result);
+	}
+
+	@Test
+	public void testAtomicSendAndReceiveWithConversionAndMessagePostProcessorUsingExchangeAndRoutingKey() throws Exception {
+		ExecutorService executor = Executors.newFixedThreadPool(1);
+		// Set up a consumer to respond to our producer
+		Future<String> received = executor.submit(new Callable<String>() {
+
+			public String call() throws Exception {
+				Message message = null;
+				for (int i = 0; i < 10; i++) {
+					message = template.receive(ROUTE);
+					if (message != null) {
+						break;
+					}
+					Thread.sleep(100L);
+				}
+				assertNotNull("No message received", message);
+				template.send(message.getMessageProperties().getReplyTo(), message);
+				return (String) template.getMessageConverter().fromMessage(message);
+			}
+
+		});
+		String result = (String) template.convertSendAndReceive("", ROUTE, "message", new MessagePostProcessor() {
+			
+			public Message postProcessMessage(Message message) throws AmqpException {
+				try {
+					byte[] newBody = new String(message.getBody(), "UTF-8").toUpperCase().getBytes("UTF-8");
+					return new Message(newBody, message.getMessageProperties());
+				}
+				catch (Exception e) {
+					throw new AmqpException("unexpected failure in test", e);
+				}
+			}
+		});
+		assertEquals("MESSAGE", received.get(1000, TimeUnit.MILLISECONDS));
+		assertEquals("MESSAGE", result);
+		// Message was consumed so nothing left on queue
+		result = (String) template.receiveAndConvert(ROUTE);
+		assertEquals(null, result);
+	}
+
 
 	@SuppressWarnings("serial")
 	private class PlannedException extends RuntimeException {

@@ -26,7 +26,8 @@
         </authorgroup>
 
         <legalnotice>
-            <para>
+            <para>Copyright &#xA9; 2010-2011</para>
+			<para>
                 Copies of this document may be made for your own use and for distribution
                 to others, provided that you do not charge any fee for such copies and
                 further provided that each copy contains this Copyright Notice, whether
@@ -39,19 +40,18 @@
 
     <xi:include href="preface.xml"/>
 
-    <!--
     <part>
         <title>Introduction</title>
         <partintro>
             <para>
-                This first part of the reference documentation
-                <link linkend="what-is-spring-amqp">is an overview</link> of
-                Spring AMQP and the underlying concepts.
+                This first part of the reference documentation is a
+                high-level overview of Spring AMQP and the underlying
+                concepts and some code snippets that will get you up
+                and running as quickly as possible.
             </para>
         </partintro>
         <xi:include href="quick-tour.xml"/>
     </part>
-    -->
 
     <part>
         <title>Reference</title>
@@ -59,7 +59,7 @@
             <para>
                 This part of the reference documentation details the various components
                 that comprise Spring AMQP. The <link linkend="amqp">main chapter</link>
-        covers the core classes to develop an AMQP application.  It part also
+        covers the core classes to develop an AMQP application.  This part also
         includes a chapter on <link lnkend="erlang">integration with
         Erlang</link> and a chapter
         about the <link linkend="sample-apps">sample applications</link>.
@@ -73,8 +73,8 @@
         <title>Spring Integration - Reference</title>
         <partintro>
             <para>
-                This part of the reference documentation details the
-        integration with the Spring Integration project.
+                This part of the reference documentation provides a quick introduction to the
+        AMQP support within the Spring Integration project.
             </para>
         </partintro>
         <xi:include href="si-amqp.xml"/>
