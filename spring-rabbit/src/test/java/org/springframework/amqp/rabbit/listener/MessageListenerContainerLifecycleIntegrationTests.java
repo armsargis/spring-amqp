@@ -160,7 +160,10 @@ public class MessageListenerContainerLifecycleIntegrationTests {
 
 			assertEquals(concurrentConsumers, container.getActiveConsumerCount());
 			container.stop();
-			Thread.sleep(1000L);
+			int n = 0;
+			while (n++ < 100 && container.getActiveConsumerCount() > 0) {
+				Thread.sleep(100);
+			}
 			assertEquals(0, container.getActiveConsumerCount());
 			if (!transactional) {
 
@@ -207,6 +210,10 @@ public class MessageListenerContainerLifecycleIntegrationTests {
 			container.shutdown();
 		}
 
+		int n = 0;
+		while (n++ < 100 && container.getActiveConsumerCount() > 0) {
+			Thread.sleep(100);
+		}
 		assertEquals(0, container.getActiveConsumerCount());
 		assertNull(template.receiveAndConvert(queue.getName()));
 

@@ -4,7 +4,7 @@
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xmlns:rabbit="http://www.springframework.org/schema/rabbit"
 	xmlns:util="http://www.springframework.org/schema/util"
-	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit-1.0.xsd
+	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit.xsd
 		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
 		http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util-3.0.xsd">
 
@@ -25,6 +25,10 @@
 	</rabbit:listener-container>
 
 	<rabbit:listener-container id="container4" connection-factory="connectionFactory">
+		<rabbit:listener id="testListener" queues="foo" ref="testBean" method="handle"/>
+	</rabbit:listener-container>
+
+	<rabbit:listener-container id="container5" connection-factory="connectionFactory" requeue-rejected="false">
 		<rabbit:listener id="testListener" queues="foo" ref="testBean" method="handle"/>
 	</rabbit:listener-container>
 

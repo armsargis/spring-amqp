@@ -21,6 +21,7 @@ import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionBuilder;
 import org.springframework.beans.factory.xml.AbstractSingleBeanDefinitionParser;
 import org.springframework.beans.factory.xml.ParserContext;
+import org.springframework.util.StringUtils;
 import org.springframework.util.xml.DomUtils;
 import org.w3c.dom.Element;
 
@@ -42,6 +43,8 @@ public abstract class AbstractExchangeParser extends AbstractSingleBeanDefinitio
 
 	protected static final String BINDING_QUEUE_ATTR = "queue";
 
+	protected static final String BINDING_EXCHANGE_ATTR = "exchange";
+
 	@Override
 	protected boolean shouldGenerateIdAsFallback() {
 		return true;
@@ -51,15 +54,7 @@ public abstract class AbstractExchangeParser extends AbstractSingleBeanDefinitio
 	protected void doParse(Element element, ParserContext parserContext, BeanDefinitionBuilder builder) {
 		String exchangeName = element.getAttribute(NAME_ATTRIBUTE);
 		builder.addConstructorArgValue(new TypedStringValue(exchangeName));
-		Element bindings = DomUtils.getChildElementByTagName(element, BINDINGS_ELE);
-		if (bindings != null) {
-			for (Element binding : DomUtils.getChildElementsByTagName(bindings, BINDING_ELE)) {
-				AbstractBeanDefinition beanDefinition = parseBinding(exchangeName, binding,
-						parserContext);
-				registerBeanDefinition(new BeanDefinitionHolder(beanDefinition, parserContext.getReaderContext()
-						.generateBeanName(beanDefinition)), parserContext.getRegistry());
-			}
-		}
+		parseBindings(element, parserContext, builder, exchangeName);
 
 		NamespaceUtils.addConstructorArgBooleanValueIfAttributeDefined(builder, element, DURABLE_ATTRIBUTE, true);
 		NamespaceUtils.addConstructorArgBooleanValueIfAttributeDefined(builder, element, AUTO_DELETE_ATTRIBUTE,
@@ -74,7 +69,41 @@ public abstract class AbstractExchangeParser extends AbstractSingleBeanDefinitio
 
 	}
 
+	protected void parseBindings(Element element, ParserContext parserContext, BeanDefinitionBuilder builder,
+			String exchangeName) {
+		Element bindings = DomUtils.getChildElementByTagName(element, BINDINGS_ELE);
+		doParseBindings(parserContext, exchangeName, bindings, this);
+	}
+
+	protected void doParseBindings(ParserContext parserContext,
+			String exchangeName, Element bindings, AbstractExchangeParser parser) {
+		if (bindings != null) {
+			for (Element binding : DomUtils.getChildElementsByTagName(bindings, BINDING_ELE)) {
+				AbstractBeanDefinition beanDefinition = parser.parseBinding(exchangeName, binding,
+						parserContext);
+				registerBeanDefinition(new BeanDefinitionHolder(beanDefinition, parserContext.getReaderContext()
+						.generateBeanName(beanDefinition)), parserContext.getRegistry());
+			}
+		}
+	}
+
 	protected abstract AbstractBeanDefinition parseBinding(String exchangeName, Element binding,
 			ParserContext parserContext);
+
+	protected void parseDestination(Element binding, ParserContext parserContext, BeanDefinitionBuilder builder) {
+		String queueAttribute = binding.getAttribute(BINDING_QUEUE_ATTR);
+		String exchangeAttribute = binding.getAttribute(BINDING_EXCHANGE_ATTR);
+		boolean hasQueueAttribute = StringUtils.hasText(queueAttribute);
+		boolean hasExchangeAttribute = StringUtils.hasText(exchangeAttribute);
+		if (!(hasQueueAttribute ^ hasExchangeAttribute)) {
+			parserContext.getReaderContext().error("Binding must have exactly one of 'queue' or 'exchange'", binding);
+		}
+		if (hasQueueAttribute) {
+			builder.addPropertyReference("destinationQueue", queueAttribute);
+		}
+		if (hasExchangeAttribute) {
+			builder.addPropertyReference("destinationExchange", exchangeAttribute);
+		}
+	}
 
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans" xmlns:beans="http://www.springframework.org/schema/beans"
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:rabbit="http://www.springframework.org/schema/rabbit"
-	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit-1.0.xsd
+	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit.xsd
 		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
 
 	<rabbit:direct-exchange name="direct" />
@@ -21,5 +21,33 @@
 	<rabbit:fanout-exchange name="fanout"/>
 
 	<rabbit:headers-exchange name="headers" xmlns="http://www.springframework.org/schema/rabbit"/>
+
+	<rabbit:federated-exchange name="fedDirect" backing-type="direct"
+			upstream-set="upstream-set1">
+		<rabbit:direct-bindings>
+			<rabbit:binding key="x" queue="dirQ" />
+		</rabbit:direct-bindings>
+	</rabbit:federated-exchange>
+
+	<rabbit:federated-exchange name="fedTopic" backing-type="topic"
+			upstream-set="upstream-set2">
+		<rabbit:topic-bindings>
+			<rabbit:binding pattern="xx.*" queue="topic" />
+		</rabbit:topic-bindings>
+	</rabbit:federated-exchange>
+
+	<rabbit:federated-exchange name="fedFanout" backing-type="fanout"
+			upstream-set="upstream-set3">
+		<rabbit:fanout-bindings>
+			<rabbit:binding queue="fan" />
+		</rabbit:fanout-bindings>
+	</rabbit:federated-exchange>
+
+	<rabbit:federated-exchange name="fedHeaders" backing-type="headers"
+			upstream-set="upstream-set4">
+		<rabbit:headers-bindings>
+			<rabbit:binding key="head" value="head" queue="head" />
+		</rabbit:headers-bindings>
+	</rabbit:federated-exchange>
 
 </beans>

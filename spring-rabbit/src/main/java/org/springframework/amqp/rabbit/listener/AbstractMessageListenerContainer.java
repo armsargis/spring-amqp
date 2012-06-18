@@ -1,11 +1,11 @@
 /*
  * Copyright 2002-2011 the original author or authors.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
@@ -34,6 +34,7 @@ import com.rabbitmq.client.Channel;
  * @author Mark Pollack
  * @author Mark Fisher
  * @author Dave Syer
+ * @author James Carr
  */
 public abstract class AbstractMessageListenerContainer extends RabbitAccessor implements BeanNameAware, DisposableBean,
 		SmartLifecycle {
@@ -80,9 +81,9 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor im
 	 * {@link AcknowledgeMode#NONE} then the channel cannot be transactional (so the container will fail on start up if
 	 * that flag is accidentally set).
 	 * </p>
-	 * 
+	 *
 	 * @param acknowledgeMode the acknowledge mode to set. Defaults to {@link AcknowledgeMode#AUTO}
-	 * 
+	 *
 	 * @see AcknowledgeMode
 	 */
 	public void setAcknowledgeMode(AcknowledgeMode acknowledgeMode) {
@@ -166,7 +167,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor im
 	 * Check the given message listener, throwing an exception if it does not correspond to a supported listener type.
 	 * <p>
 	 * By default, only a Spring {@link MessageListener} object or a Spring
-	 * {@link org.springframework.jms.listener.SessionAwareMessageListener} object will be accepted.
+	 * {@link ChannelAwareMessageListener} object will be accepted.
 	 * @param messageListener the message listener object to check
 	 * @throws IllegalArgumentException if the supplied listener is not a MessageListener or SessionAwareMessageListener
 	 * @see MessageListener
@@ -237,6 +238,7 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor im
 	/**
 	 * Delegates to {@link #validateConfiguration()} and {@link #initialize()}.
 	 */
+	@Override
 	public final void afterPropertiesSet() {
 		super.afterPropertiesSet();
 		Assert.state(
@@ -422,11 +424,8 @@ public abstract class AbstractMessageListenerContainer extends RabbitAccessor im
 	protected void invokeErrorHandler(Throwable ex) {
 		if (this.errorHandler != null) {
 			this.errorHandler.handleError(ex);
-		} else if (logger.isDebugEnabled()) {
-			logger.debug("Execution of Rabbit message listener failed, and no ErrorHandler has been set.", ex);
-		} else if (logger.isInfoEnabled()) {
-			logger.info("Execution of Rabbit message listener failed, and no ErrorHandler has been set: "
-					+ ex.getClass() + ": " + ex.getMessage());
+		} else if (logger.isWarnEnabled()) {
+			logger.warn("Execution of Rabbit message listener failed, and no ErrorHandler has been set.", ex);
 		}
 	}
 

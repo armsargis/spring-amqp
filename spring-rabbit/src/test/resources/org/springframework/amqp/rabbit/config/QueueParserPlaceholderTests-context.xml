@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <beans xmlns="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xmlns:rabbit="http://www.springframework.org/schema/rabbit" xmlns:beans="http://www.springframework.org/schema/beans"
-	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit-1.0.xsd
+	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit.xsd
 		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd">
 
 	<bean class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
@@ -10,6 +10,8 @@
 				<prop key="foo">foo</prop>
 				<prop key="true">true</prop>
 				<prop key="bar">bar</prop>
+				<prop key="ttl">100</prop>
+				<prop key="ha">all</prop>
 			</props>
 		</property>
 	</bean>
@@ -27,6 +29,10 @@
 	<rabbit:queue name="arguments">
 		<rabbit:queue-arguments>
 			<beans:entry key="foo" value="${bar}" />
+			<beans:entry key="x-message-ttl">
+				<beans:value type="java.lang.Long">${ttl}</beans:value>
+			</beans:entry>
+			<beans:entry key="x-ha-policy" value="${ha}" />
 		</rabbit:queue-arguments>
 	</rabbit:queue>
 
@@ -37,5 +43,11 @@
 	</rabbit:queue>
 
 	<rabbit:queue id="anonymousOverride" durable="false" auto-delete="true" exclusive="true" />
+
+	<rabbit:queue-arguments id="topLevelArgs">
+		<beans:entry key="baz" value="qux" />
+	</rabbit:queue-arguments>
+
+	<rabbit:queue id="referencedArguments" queue-arguments="topLevelArgs" />
 
 </beans>

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2010 the original author or authors.
- * 
+ * Copyright 2002-2012 the original author or authors.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
@@ -13,6 +13,7 @@
 
 package org.springframework.amqp.rabbit.connection;
 
+import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -21,6 +22,8 @@ import java.util.LinkedList;
 import java.util.List;
 
 import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.rabbit.support.PublisherCallbackChannel;
+import org.springframework.amqp.rabbit.support.PublisherCallbackChannelImpl;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
@@ -30,20 +33,21 @@ import com.rabbitmq.client.Channel;
  * A {@link ConnectionFactory} implementation that returns the same Connections from all {@link #createConnection()}
  * calls, and ignores calls to {@link com.rabbitmq.client.Connection#close()} and caches
  * {@link com.rabbitmq.client.Channel}.
- * 
+ *
  * <p>
  * By default, only one Channel will be cached, with further requested Channels being created and disposed on demand.
  * Consider raising the {@link #setChannelCacheSize(int) "channelCacheSize" value} in case of a high-concurrency
  * environment.
- * 
+ *
  * <p>
  * <b>NOTE: This ConnectionFactory requires explicit closing of all Channels obtained form its shared Connection.</b>
  * This is the usual recommendation for native Rabbit access code anyway. However, with this ConnectionFactory, its use
  * is mandatory in order to actually allow for Channel reuse.
- * 
+ *
  * @author Mark Pollack
  * @author Mark Fisher
  * @author Dave Syer
+ * @author Gary Russell
  */
 public class CachingConnectionFactory extends AbstractConnectionFactory {
 
@@ -57,6 +61,10 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 
 	private ChannelCachingConnectionProxy connection;
 
+	private volatile boolean publisherConfirms;
+
+	private volatile boolean publisherReturns;
+
 	/** Synchronization monitor for the shared Connection */
 	private final Object connectionMonitor = new Object();
 
@@ -69,9 +77,11 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 	}
 
 	/**
-	 * Create a new CachingConnectionFactory given a host name.
-	 * 
+	 * Create a new CachingConnectionFactory given a host name
+	 * and port.
+	 *
 	 * @param hostname the host name to connect to
+	 * @param port the port number
 	 */
 	public CachingConnectionFactory(String hostname, int port) {
 		super(new com.rabbitmq.client.ConnectionFactory());
@@ -83,9 +93,10 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 	}
 
 	/**
-	 * Create a new CachingConnectionFactory given a host name.
-	 * 
-	 * @param hostName the host name to connect to
+	 * Create a new CachingConnectionFactory given a port on the hostname returned from
+	 * InetAddress.getLocalHost(), or "localhost" if getLocalHost() throws an exception.
+	 *
+	 * @param port the port number
 	 */
 	public CachingConnectionFactory(int port) {
 		this(null, port);
@@ -93,7 +104,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 
 	/**
 	 * Create a new CachingConnectionFactory given a host name.
-	 * 
+	 *
 	 * @param hostname the host name to connect to
 	 */
 	public CachingConnectionFactory(String hostname) {
@@ -102,7 +113,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 
 	/**
 	 * Create a new CachingConnectionFactory for the given target ConnectionFactory.
-	 * 
+	 *
 	 * @param rabbitConnectionFactory the target ConnectionFactory
 	 */
 	public CachingConnectionFactory(com.rabbitmq.client.ConnectionFactory rabbitConnectionFactory) {
@@ -118,6 +129,23 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 		return this.channelCacheSize;
 	}
 
+	public boolean isPublisherConfirms() {
+		return publisherConfirms;
+	}
+
+	public boolean isPublisherReturns() {
+		return publisherReturns;
+	}
+
+	public void setPublisherReturns(boolean publisherReturns) {
+		this.publisherReturns = publisherReturns;
+	}
+
+	public void setPublisherConfirms(boolean publisherConfirms) {
+		this.publisherConfirms = publisherConfirms;
+	}
+
+	@Override
 	public void setConnectionListeners(List<? extends ConnectionListener> listeners) {
 		super.setConnectionListeners(listeners);
 		// If the connection is already alive we assume that the new listeners want to be notified
@@ -126,6 +154,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 		}
 	}
 
+	@Override
 	public void addConnectionListener(ConnectionListener listener) {
 		super.addConnectionListener(listener);
 		// If the connection is already alive we assume that the new listener wants to be notified
@@ -159,8 +188,15 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 			logger.debug("Creating cached Rabbit Channel from " + targetChannel);
 		}
 		getChannelListener().onCreate(targetChannel, transactional);
+		Class<?>[] interfaces;
+		if (this.publisherConfirms || this.publisherReturns) {
+			interfaces = new Class[] { ChannelProxy.class, PublisherCallbackChannel.class };
+		}
+		else {
+			interfaces = new Class[] { ChannelProxy.class };
+		}
 		return (ChannelProxy) Proxy.newProxyInstance(ChannelProxy.class.getClassLoader(),
-				new Class[] { ChannelProxy.class }, new CachedChannelInvocationHandler(targetChannel, channelList,
+				interfaces, new CachedChannelInvocationHandler(targetChannel, channelList,
 						transactional));
 	}
 
@@ -170,7 +206,20 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 			// Use createConnection here not doCreateConnection so that the old one is properly disposed
 			createConnection();
 		}
-		return this.connection.createBareChannel(transactional);
+		Channel channel = this.connection.createBareChannel(transactional);
+		if (this.publisherConfirms) {
+			try {
+				channel.confirmSelect();
+			} catch (IOException e) {
+				logger.error("Could not configure the channel to receive publisher confirms", e);
+			}
+		}
+		if (this.publisherConfirms || this.publisherReturns) {
+			if (!(channel instanceof PublisherCallbackChannelImpl)) {
+				channel = new PublisherCallbackChannelImpl(channel);
+			}
+		}
+		return channel;
 	}
 
 	public final Connection createConnection() throws AmqpException {
@@ -190,6 +239,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 	 * As this bean implements DisposableBean, a bean factory will automatically invoke this on destruction of its
 	 * cached singletons.
 	 */
+	@Override
 	public final void destroy() {
 		synchronized (this.connectionMonitor) {
 			if (connection != null) {
@@ -314,7 +364,7 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 
 		/**
 		 * GUARDED by channelList
-		 * 
+		 *
 		 * @param proxy the channel to close
 		 */
 		private void logicalClose(ChannelProxy proxy) throws Exception {
@@ -375,11 +425,11 @@ public class CachingConnectionFactory extends AbstractConnectionFactory {
 		}
 
 		public void destroy() {
+			reset();
 			if (this.target != null) {
 				getConnectionListener().onClose(target);
 				RabbitUtils.closeConnection(this.target);
 			}
-			reset();
 			this.target = null;
 		}
 

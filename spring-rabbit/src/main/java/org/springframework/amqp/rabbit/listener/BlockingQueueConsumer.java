@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2011 the original author or authors.
+ * Copyright 2002-2012 the original author or authors.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -46,6 +47,7 @@ import com.rabbitmq.utility.Utility;
  * 
  * @author Mark Pollack
  * @author Dave Syer
+ * @author Gary Russell
  * 
  */
 public class BlockingQueueConsumer {
@@ -70,6 +72,8 @@ public class BlockingQueueConsumer {
 
 	private final AtomicBoolean cancelled = new AtomicBoolean(false);
 
+	private final AtomicBoolean cancelReceived = new AtomicBoolean(false);
+
 	private final AcknowledgeMode acknowledgeMode;
 
 	private final ConnectionFactory connectionFactory;
@@ -80,6 +84,20 @@ public class BlockingQueueConsumer {
 
 	private Set<Long> deliveryTags = new LinkedHashSet<Long>();
 
+	private final boolean defaultRequeuRejected;
+
+	/**
+	 * Create a consumer. The consumer must not attempt to use the connection factory or communicate with the broker
+	 * until it is started. RequeueRejected defaults to true.
+	 */
+	public BlockingQueueConsumer(ConnectionFactory connectionFactory,
+			MessagePropertiesConverter messagePropertiesConverter,
+			ActiveObjectCounter<BlockingQueueConsumer> activeObjectCounter, AcknowledgeMode acknowledgeMode,
+			boolean transactional, int prefetchCount, String... queues) {
+		this(connectionFactory, messagePropertiesConverter, activeObjectCounter,
+				acknowledgeMode, transactional, prefetchCount, true, queues);
+	}
+
 	/**
 	 * Create a consumer. The consumer must not attempt to use the connection factory or communicate with the broker
 	 * until it is started.
@@ -87,13 +105,14 @@ public class BlockingQueueConsumer {
 	public BlockingQueueConsumer(ConnectionFactory connectionFactory,
 			MessagePropertiesConverter messagePropertiesConverter,
 			ActiveObjectCounter<BlockingQueueConsumer> activeObjectCounter, AcknowledgeMode acknowledgeMode,
-			boolean transactional, int prefetchCount, String... queues) {
+			boolean transactional, int prefetchCount, boolean defaultRequeueRejected, String... queues) {
 		this.connectionFactory = connectionFactory;
 		this.messagePropertiesConverter = messagePropertiesConverter;
 		this.activeObjectCounter = activeObjectCounter;
 		this.acknowledgeMode = acknowledgeMode;
 		this.transactional = transactional;
 		this.prefetchCount = prefetchCount;
+		this.defaultRequeuRejected = defaultRequeueRejected;
 		this.queues = queues;
 	}
 
@@ -166,7 +185,11 @@ public class BlockingQueueConsumer {
 			logger.debug("Retrieving delivery for " + this);
 		}
 		checkShutdown();
-		return handle(queue.poll(timeout, TimeUnit.MILLISECONDS));
+		Message message = handle(queue.poll(timeout, TimeUnit.MILLISECONDS));
+		if (message == null && cancelReceived.get()) {
+			throw new ConsumerCancelledException();
+		}
+		return message;
 	}
 
 	public void start() throws AmqpException {
@@ -178,20 +201,36 @@ public class BlockingQueueConsumer {
 		this.consumer = new InternalConsumer(channel);
 		this.deliveryTags.clear();
 		this.activeObjectCounter.add(this);
-		try {
-			if (!acknowledgeMode.isAutoAck()) {
-				// Set basicQos before calling basicConsume (otherwise if we are not acking the broker
-				// will send blocks of 100 messages)
-				channel.basicQos(prefetchCount);
+		int passiveDeclareTries = 3; // mirrored queue might be being moved
+		do {
+			try {
+				if (!acknowledgeMode.isAutoAck()) {
+					// Set basicQos before calling basicConsume (otherwise if we are not acking the broker
+					// will send blocks of 100 messages)
+					channel.basicQos(prefetchCount);
+				}
+				for (int i = 0; i < queues.length; i++) {
+					channel.queueDeclarePassive(queues[i]);
+				}
+				passiveDeclareTries = 0;
+			} catch (IOException e) {
+				if (passiveDeclareTries > 0 && channel.isOpen()) {
+					if (logger.isWarnEnabled()) {
+						logger.warn("Reconnect failed; retries left=" + (passiveDeclareTries-1), e);
+						try {
+							Thread.sleep(5000);
+						} catch (InterruptedException e1) {
+							Thread.currentThread().interrupt();
+						}
+					}
+				} else {
+					this.activeObjectCounter.release(this);
+					throw new FatalListenerStartupException("Cannot prepare queue for listener. "
+							+ "Either the queue doesn't exist or the broker will not allow us to use it.", e);
+				}
 			}
-			for (int i = 0; i < queues.length; i++) {
-				channel.queueDeclarePassive(queues[i]);
-			}
-		} catch (IOException e) {
-			this.activeObjectCounter.release(this);
-			throw new FatalListenerStartupException("Cannot prepare queue for listener. "
-					+ "Either the queue doesn't exist or the broker will not allow us to use it.", e);
-		}
+		} while (passiveDeclareTries-- > 0);
+
 		try {
 			for (int i = 0; i < queues.length; i++) {
 				channel.basicConsume(queues[i], acknowledgeMode.isAutoAck(), consumer);
@@ -206,13 +245,23 @@ public class BlockingQueueConsumer {
 
 	public void stop() {
 		cancelled.set(true);
-		if (consumer != null && consumer.getChannel() != null && consumer.getConsumerTag() != null) {
-			RabbitUtils.closeMessageConsumer(consumer.getChannel(), consumer.getConsumerTag(), transactional);
+		if (consumer != null && consumer.getChannel() != null && consumer.getConsumerTag() != null
+				&& !this.cancelReceived.get()) {
+			try {
+				RabbitUtils.closeMessageConsumer(consumer.getChannel(), consumer.getConsumerTag(), transactional);
+			} catch (Exception e) {
+				if (logger.isDebugEnabled()) {
+					logger.debug("Error closing consumer", e);
+				}
+			}
 		}
-		logger.debug("Closing Rabbit Channel: " + channel);
+		if (logger.isDebugEnabled()) {
+			logger.debug("Closing Rabbit Channel: " + channel);
+		}
 		// This one never throws exceptions...
 		RabbitUtils.closeChannel(channel);
 		deliveryTags.clear();
+		consumer = null;
 	}
 
 	private class InternalConsumer extends DefaultConsumer {
@@ -229,6 +278,14 @@ public class BlockingQueueConsumer {
 			shutdown = sig;
 			// The delivery tags will be invalid if the channel shuts down
 			deliveryTags.clear();
+		}
+
+		@Override
+		public void handleCancel(String consumerTag) throws IOException {
+			if (logger.isWarnEnabled()) {
+				logger.warn("Cancel received");
+			}
+			cancelReceived.set(true);
 		}
 
 		@Override
@@ -315,9 +372,17 @@ public class BlockingQueueConsumer {
 				if (logger.isDebugEnabled()) {
 					logger.debug("Rejecting messages");
 				}
+				boolean shouldRequeue = this.defaultRequeuRejected;
+				Throwable t = ex;
+				while (shouldRequeue && t != null) {
+					if (t instanceof AmqpRejectAndDontRequeueException) {
+						shouldRequeue = false;
+					}
+					t = t.getCause();
+				}
 				for (Long deliveryTag : deliveryTags) {
 					// With newer RabbitMQ brokers could use basicNack here...
-					channel.basicReject(deliveryTag, true);
+					channel.basicReject(deliveryTag, shouldRequeue);
 				}
 				if (transactional) {
 					// Need to commit the reject (=nack)
