@@ -1,14 +1,17 @@
 /*
- * Copyright 2002-2010 the original author or authors.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Copyright 2002-2017 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package org.springframework.amqp.rabbit.connection;
@@ -21,6 +24,7 @@ import java.util.Map;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.AmqpIOException;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -35,13 +39,14 @@ import com.rabbitmq.client.Channel;
 /**
  * Rabbit resource holder, wrapping a RabbitMQ Connection and Channel. RabbitTransactionManager binds instances of this
  * class to the thread, for a given Rabbit ConnectionFactory.
- * 
+ *
  * <p>
  * Note: This is an SPI class, not intended to be used by applications.
- * 
+ *
  * @author Mark Fisher
  * @author Dave Syer
- * 
+ * @author Gary Russell
+ *
  * @see RabbitTransactionManager
  * @see RabbitTemplate
  */
@@ -49,7 +54,7 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 
 	private static final Log logger = LogFactory.getLog(RabbitResourceHolder.class);
 
-	private boolean frozen = false;
+	private final boolean frozen = false;
 
 	private final List<Connection> connections = new LinkedList<Connection>();
 
@@ -57,26 +62,51 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 
 	private final Map<Connection, List<Channel>> channelsPerConnection = new HashMap<Connection, List<Channel>>();
 
-	private MultiValueMap<Channel, Long> deliveryTags = new LinkedMultiValueMap<Channel, Long>();
+	private final MultiValueMap<Channel, Long> deliveryTags = new LinkedMultiValueMap<Channel, Long>();
 
-	private boolean transactional;
+	private final boolean releaseAfterCompletion;
+
+	private boolean requeueOnRollback = true; // No need for volatile written/read on the same thread.
 
 	/**
 	 * Create a new RabbitResourceHolder that is open for resources to be added.
 	 */
 	public RabbitResourceHolder() {
+		this.releaseAfterCompletion = true;
 	}
 
 	/**
+	 * Construct an instance for the channel.
 	 * @param channel a channel to add
+	 * @param releaseAfterCompletion true if the channel should be released after completion.
 	 */
-	public RabbitResourceHolder(Channel channel) {
-		this();
+	public RabbitResourceHolder(Channel channel, boolean releaseAfterCompletion) {
 		addChannel(channel);
+		this.releaseAfterCompletion = releaseAfterCompletion;
 	}
 
 	public final boolean isFrozen() {
 		return this.frozen;
+	}
+
+	/**
+	 * Whether the resources should be released after transaction completion.
+	 * Default true. Listener containers set to false because the listener continues
+	 * to use the channel.
+	 *
+	 * @return true if the resources should be released.
+	 */
+	public boolean isReleaseAfterCompletion() {
+		return this.releaseAfterCompletion;
+	}
+
+	/**
+	 * Set to true to requeue a message on rollback; default true.
+	 * @param requeueOnRollback true to requeue
+	 * @since 1.7.1
+	 */
+	public void setRequeueOnRollback(boolean requeueOnRollback) {
+		this.requeueOnRollback = requeueOnRollback;
 	}
 
 	public final void addConnection(Connection connection) {
@@ -126,14 +156,15 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 	public void commitAll() throws AmqpException {
 		try {
 			for (Channel channel : this.channels) {
-				if (deliveryTags.containsKey(channel)) {
-					for (Long deliveryTag : deliveryTags.get(channel)) {
+				if (this.deliveryTags.containsKey(channel)) {
+					for (Long deliveryTag : this.deliveryTags.get(channel)) {
 						channel.basicAck(deliveryTag, false);
 					}
 				}
 				channel.txCommit();
 			}
-		} catch (IOException e) {
+		}
+		catch (IOException e) {
 			throw new AmqpException("failed to commit RabbitMQ transaction", e);
 		}
 	}
@@ -141,12 +172,20 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 	public void closeAll() {
 		for (Channel channel : this.channels) {
 			try {
-				channel.close();
-			} catch (Throwable ex) {
+				if (channel != ConsumerChannelRegistry.getConsumerChannel()) {
+					channel.close();
+				}
+				else {
+					if (logger.isDebugEnabled()) {
+						logger.debug("Skipping close of consumer channel: " + channel.toString());
+					}
+				}
+			}
+			catch (Exception ex) {
 				logger.debug("Could not close synchronized Rabbit Channel after transaction", ex);
 			}
 		}
-		for (Connection con : this.connections) {
+		for (Connection con : this.connections) { //NOSONAR
 			RabbitUtils.closeConnection(con);
 		}
 		this.connections.clear();
@@ -164,11 +203,12 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 				logger.debug("Rolling back messages to channel: " + channel);
 			}
 			RabbitUtils.rollbackIfNecessary(channel);
-			if (deliveryTags.containsKey(channel)) {
-				for (Long deliveryTag : deliveryTags.get(channel)) {
+			if (this.deliveryTags.containsKey(channel)) {
+				for (Long deliveryTag : this.deliveryTags.get(channel)) {
 					try {
-						channel.basicReject(deliveryTag, true);
-					} catch (IOException ex) {
+						channel.basicReject(deliveryTag, this.requeueOnRollback);
+					}
+					catch (IOException ex) {
 						throw new AmqpIOException(ex);
 					}
 				}
@@ -179,10 +219,13 @@ public class RabbitResourceHolder extends ResourceHolderSupport {
 	}
 
 	/**
+	 * Invalid - always returned false.
 	 * @return true if the channels in this holder are transactional
+	 * @deprecated Not used
 	 */
+	@Deprecated
 	public boolean isChannelTransactional() {
-		return this.transactional;
+		return false;
 	}
 
 }

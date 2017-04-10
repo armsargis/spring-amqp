@@ -1,20 +1,42 @@
+/*
+ * Copyright 2002-2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.springframework.amqp.rabbit.listener;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.log4j.Level;
+import org.apache.logging.log4j.Level;
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
+
 import org.springframework.amqp.AmqpIllegalStateException;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Message;
@@ -26,25 +48,35 @@ import org.springframework.amqp.rabbit.connection.ConnectionProxy;
 import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.listener.MessageListenerBrokerInterruptionIntegrationTests.VanillaListener;
+import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
+import org.springframework.amqp.rabbit.junit.LongRunningIntegrationTest;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
-import org.springframework.amqp.rabbit.test.BrokerRunning;
-import org.springframework.amqp.rabbit.test.BrokerTestUtils;
-import org.springframework.amqp.rabbit.test.Log4jLevelAdjuster;
+import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
+import org.springframework.amqp.utils.test.TestUtils;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.context.support.GenericApplicationContext;
 
 import com.rabbitmq.client.Channel;
 
+/**
+ * @author Dave Syer
+ * @author Gunnar Hillert
+ * @author Gary Russell
+ * @since 1.0
+ *
+ */
 public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	private static Log logger = LogFactory.getLog(MessageListenerRecoveryCachingConnectionIntegrationTests.class);
 
-	private Queue queue = new Queue("test.queue");
+	private final Queue queue = new Queue("test.queue");
 
-	private Queue sendQueue = new Queue("test.send");
+	private final Queue sendQueue = new Queue("test.send");
 
 	private int concurrentConsumers = 1;
 
-	private int messageCount = 10;
+	private final int messageCount = 10;
 
 	private boolean transactional = false;
 
@@ -53,14 +85,18 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 	private SimpleMessageListenerContainer container;
 
 	@Rule
-	public Log4jLevelAdjuster logLevels = new Log4jLevelAdjuster(Level.DEBUG, RabbitTemplate.class,
+	public LongRunningIntegrationTest longTests = new LongRunningIntegrationTest();
+
+	@Rule
+	public LogLevelAdjuster logLevels = new LogLevelAdjuster(Level.DEBUG, RabbitTemplate.class, ManualAckListener.class,
 			SimpleMessageListenerContainer.class, BlockingQueueConsumer.class, CachingConnectionFactory.class);
 
 	@Rule
-	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue, sendQueue);
+	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue.getName(), sendQueue.getName());
 
-	protected ConnectionFactory createConnectionFactory() {
+	protected CachingConnectionFactory createConnectionFactory() {
 		CachingConnectionFactory connectionFactory = new CachingConnectionFactory();
+		connectionFactory.setHost("localhost");
 		connectionFactory.setChannelCacheSize(concurrentConsumers);
 		connectionFactory.setPort(BrokerTestUtils.getPort());
 		return connectionFactory;
@@ -74,6 +110,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		if (container != null) {
 			container.shutdown();
 		}
+		this.brokerIsRunning.removeTestQueues();
 	}
 
 	@Test
@@ -103,6 +140,9 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		assertNotNull(bytes);
 		assertEquals("bar", new String(bytes));
 		assertEquals(null, template.receiveAndConvert(queue.getName()));
+
+		this.container.stop();
+		((DisposableBean) connectionFactory).destroy();
 
 	}
 
@@ -134,17 +174,21 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		// Sending of bar message is also rolled back
 		assertNull(template.receiveAndConvert(sendQueue.getName()));
 
+		((DisposableBean) connectionFactory).destroy();
+
 	}
 
 	@Test
 	public void testListenerRecoversFromBogusDoubleAck() throws Exception {
 
-		RabbitTemplate template = new RabbitTemplate(createConnectionFactory());
+		ConnectionFactory connectionFactory1 = createConnectionFactory();
+		RabbitTemplate template = new RabbitTemplate(connectionFactory1);
 
 		acknowledgeMode = AcknowledgeMode.MANUAL;
 
 		CountDownLatch latch = new CountDownLatch(messageCount);
-		container = createContainer(queue.getName(), new ManualAckListener(latch), createConnectionFactory());
+		ConnectionFactory connectionFactory2 = createConnectionFactory();
+		container = createContainer(queue.getName(), new ManualAckListener(latch), connectionFactory2);
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend(queue.getName(), i + "foo");
 		}
@@ -156,15 +200,20 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 		assertNull(template.receiveAndConvert(queue.getName()));
 
+		this.container.stop();
+		((DisposableBean) connectionFactory1).destroy();
+		((DisposableBean) connectionFactory2).destroy();
 	}
 
 	@Test
 	public void testListenerRecoversFromClosedChannel() throws Exception {
 
-		RabbitTemplate template = new RabbitTemplate(createConnectionFactory());
+		ConnectionFactory connectionFactory1 = createConnectionFactory();
+		RabbitTemplate template = new RabbitTemplate(connectionFactory1);
 
 		CountDownLatch latch = new CountDownLatch(messageCount);
-		container = createContainer(queue.getName(), new AbortChannelListener(latch), createConnectionFactory());
+		ConnectionFactory connectionFactory2 = createConnectionFactory();
+		container = createContainer(queue.getName(), new AbortChannelListener(latch), connectionFactory2);
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend(queue.getName(), i + "foo");
 		}
@@ -176,15 +225,20 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 		assertNull(template.receiveAndConvert(queue.getName()));
 
+		this.container.stop();
+		((DisposableBean) connectionFactory1).destroy();
+		((DisposableBean) connectionFactory2).destroy();
 	}
 
 	@Test
 	public void testListenerRecoversFromClosedChannelAndStop() throws Exception {
 
-		RabbitTemplate template = new RabbitTemplate(createConnectionFactory());
+		ConnectionFactory connectionFactory1 = createConnectionFactory();
+		RabbitTemplate template = new RabbitTemplate(connectionFactory1);
 
 		CountDownLatch latch = new CountDownLatch(messageCount);
-		container = createContainer(queue.getName(), new AbortChannelListener(latch), createConnectionFactory());
+		ConnectionFactory connectionFactory2 = createConnectionFactory();
+		container = createContainer(queue.getName(), new AbortChannelListener(latch), connectionFactory2);
 		int n = 0;
 		while (n++ < 100 && container.getActiveConsumerCount() != concurrentConsumers) {
 			Thread.sleep(50L);
@@ -206,18 +260,24 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		container.stop();
 		assertEquals(0, container.getActiveConsumerCount());
 
+		((DisposableBean) connectionFactory1).destroy();
+		((DisposableBean) connectionFactory2).destroy();
+
 	}
 
 	@Test
 	public void testListenerRecoversFromClosedConnection() throws Exception {
 
-		RabbitTemplate template = new RabbitTemplate(createConnectionFactory());
+		ConnectionFactory connectionFactory1 = createConnectionFactory();
+		RabbitTemplate template = new RabbitTemplate(connectionFactory1);
 
 		CountDownLatch latch = new CountDownLatch(messageCount);
-		ConnectionFactory connectionFactory = createConnectionFactory();
+		CachingConnectionFactory connectionFactory2 = createConnectionFactory();
+		// this test closes the underlying connection normally; it won't automatically recover.
+		connectionFactory2.getRabbitConnectionFactory().setAutomaticRecoveryEnabled(false);
 		container = createContainer(queue.getName(),
-				new CloseConnectionListener((ConnectionProxy) connectionFactory.createConnection(), latch),
-				connectionFactory);
+				new CloseConnectionListener((ConnectionProxy) connectionFactory2.createConnection(), latch),
+				connectionFactory2);
 		for (int i = 0; i < messageCount; i++) {
 			template.convertAndSend(queue.getName(), i + "foo");
 		}
@@ -228,6 +288,10 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		assertTrue("Timed out waiting for message", waited);
 
 		assertNull(template.receiveAndConvert(queue.getName()));
+
+		this.container.stop();
+		((DisposableBean) connectionFactory1).destroy();
+		((DisposableBean) connectionFactory2).destroy();
 
 	}
 
@@ -254,13 +318,27 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 		assertNull(template.receiveAndConvert(queue.getName()));
 
+		this.container.stop();
+		((DisposableBean) connectionFactory).destroy();
+
 	}
 
 	@Test(expected = AmqpIllegalStateException.class)
 	public void testListenerDoesNotRecoverFromMissingQueue() throws Exception {
+
 		concurrentConsumers = 3;
 		CountDownLatch latch = new CountDownLatch(messageCount);
-		container = createContainer("nonexistent", new VanillaListener(latch), createConnectionFactory());
+
+		ConnectionFactory connectionFactory = createConnectionFactory();
+		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
+		admin.deleteQueue("nonexistent");
+
+		try {
+			container = createContainer("nonexistent", new VanillaListener(latch), connectionFactory);
+		}
+		finally {
+			((DisposableBean) connectionFactory).destroy();
+		}
 	}
 
 	@Test(expected = AmqpIllegalStateException.class)
@@ -271,7 +349,98 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 		 */
 		concurrentConsumers = 1;
 		CountDownLatch latch = new CountDownLatch(messageCount);
-		container = createContainer("nonexistent", new VanillaListener(latch), createConnectionFactory());
+
+		ConnectionFactory connectionFactory = createConnectionFactory();
+		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
+		admin.deleteQueue("nonexistent");
+		try {
+			container = createContainer("nonexistent", new VanillaListener(latch), connectionFactory);
+		}
+		finally {
+			((DisposableBean) connectionFactory).destroy();
+		}
+	}
+
+	@Test
+	public void testSingleListenerDoesRecoverFromMissingQueueWhenNotFatal() throws Exception {
+		concurrentConsumers = 1;
+		CountDownLatch latch = new CountDownLatch(messageCount);
+
+		ConnectionFactory connectionFactory = createConnectionFactory();
+		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
+		admin.deleteQueue("nonexistent");
+		try {
+			container = doCreateContainer("nonexistent", new VanillaListener(latch), connectionFactory);
+			container.setMissingQueuesFatal(false);
+			container.start();
+			testRecoverMissingQueues(latch, connectionFactory);
+		}
+		finally {
+			if (container != null) {
+				container.stop();
+			}
+			admin.deleteQueue("nonexistent");
+			((DisposableBean) connectionFactory).destroy();
+		}
+	}
+
+	@Test
+	public void testSingleListenerDoesRecoverFromMissingQueueWhenNotFatalGlobalProps() throws Exception {
+		concurrentConsumers = 1;
+		CountDownLatch latch = new CountDownLatch(messageCount);
+
+		ConnectionFactory connectionFactory = createConnectionFactory();
+		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
+		admin.deleteQueue("nonexistent");
+		try {
+			container = doCreateContainer("nonexistent", new VanillaListener(latch), connectionFactory);
+			Properties properties = new Properties();
+			properties.setProperty("smlc.missing.queues.fatal", "false");
+			GenericApplicationContext context = new GenericApplicationContext();
+			context.getBeanFactory().registerSingleton("spring.amqp.global.properties", properties);
+			context.refresh();
+			container.setApplicationContext(context);
+			container.start();
+			testRecoverMissingQueues(latch, connectionFactory);
+		}
+		finally {
+			if (container != null) {
+				container.stop();
+			}
+			admin.deleteQueue("nonexistent");
+			((DisposableBean) connectionFactory).destroy();
+		}
+	}
+
+	private void testRecoverMissingQueues(CountDownLatch latch, ConnectionFactory connectionFactory)
+			throws InterruptedException {
+		RabbitAdmin admin = new RabbitAdmin(connectionFactory);
+		// queue doesn't exist during startup - verify we started, create queue and verify recovery
+		Thread.sleep(1000);
+		assertEquals(messageCount, latch.getCount());
+		admin.declareQueue(new Queue("nonexistent"));
+		RabbitTemplate template = new RabbitTemplate(connectionFactory);
+		for (int i = 0; i < messageCount; i++) {
+			template.convertAndSend("nonexistent", "foo" + i);
+		}
+		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		Set<?> consumers = TestUtils.getPropertyValue(container, "consumers", Set.class);
+		assertEquals(1, consumers.size());
+		Object consumer = consumers.iterator().next();
+
+		// delete the queue and verify we recover again when it is recreated.
+		admin.deleteQueue("nonexistent");
+		Thread.sleep(1000);
+		latch = new CountDownLatch(messageCount);
+		container.setMessageListener(new MessageListenerAdapter(new VanillaListener(latch)));
+		assertEquals(messageCount, latch.getCount());
+		admin.declareQueue(new Queue("nonexistent"));
+		for (int i = 0; i < messageCount; i++) {
+			template.convertAndSend("nonexistent", "foo" + i);
+		}
+		assertTrue(latch.await(10, TimeUnit.SECONDS));
+		assertEquals(1, consumers.size());
+		assertNotSame(consumer, consumers.iterator().next());
 	}
 
 	private int getTimeout() {
@@ -280,27 +449,38 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	private SimpleMessageListenerContainer createContainer(String queueName, Object listener,
 			ConnectionFactory connectionFactory) {
+		SimpleMessageListenerContainer container = doCreateContainer(queueName, listener, connectionFactory);
+		container.start();
+		return container;
+	}
+
+	protected SimpleMessageListenerContainer doCreateContainer(String queueName, Object listener,
+			ConnectionFactory connectionFactory) {
 		SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
 		container.setMessageListener(new MessageListenerAdapter(listener));
 		container.setQueueNames(queueName);
 		container.setConcurrentConsumers(concurrentConsumers);
 		container.setChannelTransacted(transactional);
 		container.setAcknowledgeMode(acknowledgeMode);
+		container.setRecoveryInterval(100);
+		container.setFailedDeclarationRetryInterval(100);
 		container.afterPropertiesSet();
-		container.start();
 		return container;
 	}
 
 	public static class ManualAckListener implements ChannelAwareMessageListener {
 
-		private AtomicBoolean failed = new AtomicBoolean(false);
+		private final AtomicBoolean failed = new AtomicBoolean(false);
 
 		private final CountDownLatch latch;
+
+		private final Set<String> received = Collections.synchronizedSet(new HashSet<String>());
 
 		public ManualAckListener(CountDownLatch latch) {
 			this.latch = latch;
 		}
 
+		@Override
 		public void onMessage(Message message, Channel channel) throws Exception {
 			String value = new String(message.getBody());
 			try {
@@ -310,8 +490,15 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 					// intentional error (causes exception on connection thread):
 					channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
 				}
-			} finally {
-				latch.countDown();
+			}
+			finally {
+				if (this.received.add(value)) {
+					latch.countDown();
+				}
+				else {
+					logger.debug(value + " already received, redelivered="
+							+ message.getMessageProperties().isRedelivered());
+				}
 			}
 		}
 	}
@@ -330,6 +517,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 			this.fail = fail;
 		}
 
+		@Override
 		public void onMessage(Message message, Channel channel) throws Exception {
 			String value = new String(message.getBody());
 			try {
@@ -340,7 +528,8 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 					// intentional error (causes exception on connection thread):
 					throw new RuntimeException("Planned");
 				}
-			} finally {
+			}
+			finally {
 				latch.countDown();
 			}
 		}
@@ -348,7 +537,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	public static class AbortChannelListener implements ChannelAwareMessageListener {
 
-		private AtomicBoolean failed = new AtomicBoolean(false);
+		private final AtomicBoolean failed = new AtomicBoolean(false);
 
 		private final CountDownLatch latch;
 
@@ -356,13 +545,15 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 			this.latch = latch;
 		}
 
+		@Override
 		public void onMessage(Message message, Channel channel) throws Exception {
 			String value = new String(message.getBody());
 			logger.debug("Receiving: " + value);
 			if (failed.compareAndSet(false, true)) {
 				// intentional error (causes exception on connection thread):
 				channel.abort();
-			} else {
+			}
+			else {
 				latch.countDown();
 			}
 		}
@@ -370,7 +561,7 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 
 	public static class CloseConnectionListener implements ChannelAwareMessageListener {
 
-		private AtomicBoolean failed = new AtomicBoolean(false);
+		private final AtomicBoolean failed = new AtomicBoolean(false);
 
 		private final CountDownLatch latch;
 
@@ -381,15 +572,34 @@ public class MessageListenerRecoveryCachingConnectionIntegrationTests {
 			this.latch = latch;
 		}
 
+		@Override
 		public void onMessage(Message message, Channel channel) throws Exception {
 			String value = new String(message.getBody());
 			logger.debug("Receiving: " + value);
 			if (failed.compareAndSet(false, true)) {
 				// intentional error (causes exception on connection thread):
 				connection.close();
-			} else {
+			}
+			else {
 				latch.countDown();
 			}
 		}
 	}
+
+	public static class VanillaListener implements ChannelAwareMessageListener {
+
+		private final CountDownLatch latch;
+
+		public VanillaListener(CountDownLatch latch) {
+			this.latch = latch;
+		}
+
+		@Override
+		public void onMessage(Message message, Channel channel) throws Exception {
+			String value = new String(message.getBody());
+			logger.debug("Receiving: " + value);
+			latch.countDown();
+		}
+	}
+
 }

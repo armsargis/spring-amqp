@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2011 the original author or authors.
+ * Copyright 2002-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import org.springframework.beans.factory.xml.NamespaceHandlerSupport;
 
 /**
  * Namespace handler for Rabbit.
- * 
+ *
  * @author Mark Pollack
  * @author Mark Fisher
  * @author Gary Russell
@@ -34,12 +34,12 @@ public class RabbitNamespaceHandler extends NamespaceHandlerSupport {
 		registerBeanDefinitionParser("topic-exchange", new TopicExchangeParser());
 		registerBeanDefinitionParser("fanout-exchange", new FanoutExchangeParser());
 		registerBeanDefinitionParser("headers-exchange", new HeadersExchangeParser());
-		registerBeanDefinitionParser("federated-exchange", new FederatedExchangeParser());
 		registerBeanDefinitionParser("listener-container", new ListenerContainerParser());
 		registerBeanDefinitionParser("admin", new AdminParser());
 		registerBeanDefinitionParser("connection-factory", new ConnectionFactoryParser());
 		registerBeanDefinitionParser("template", new TemplateParser());
 		registerBeanDefinitionParser("queue-arguments", new QueueArgumentsParser());
+		registerBeanDefinitionParser("annotation-driven", new AnnotationDrivenParser());
 	}
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2008 the original author or authors.
+ * Copyright 2002-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import java.util.Map;
 
 import org.junit.Before;
 import org.junit.Test;
+
 import org.springframework.amqp.core.AnonymousQueue;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.DirectExchange;
@@ -33,16 +34,27 @@ import org.springframework.amqp.core.HeadersExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
-import org.springframework.beans.factory.xml.XmlBeanFactory;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.beans.factory.xml.XmlBeanDefinitionReader;
 import org.springframework.core.io.ClassPathResource;
 
+/**
+ * @author Tomas Lukosius
+ * @author Dave Syer
+ * @author Gary Russell
+ * @author Artem Bilan
+ * @since 1.0
+ *
+ */
 public final class RabbitNamespaceHandlerTests {
 
-	private XmlBeanFactory beanFactory;
+	private DefaultListableBeanFactory beanFactory;
 
 	@Before
 	public void setUp() throws Exception {
-		beanFactory = new XmlBeanFactory(new ClassPathResource(getClass().getSimpleName()+"-context.xml", getClass()));
+		beanFactory = new DefaultListableBeanFactory();
+		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(beanFactory);
+		reader.loadBeanDefinitions(new ClassPathResource(getClass().getSimpleName() + "-context.xml", getClass()));
 	}
 
 	@Test
@@ -54,9 +66,8 @@ public final class RabbitNamespaceHandlerTests {
 
 	@Test
 	public void testAliasQueue() throws Exception {
-		Queue queue = beanFactory.getBean("spam", Queue.class);
+		Queue queue = beanFactory.getBean("bar", Queue.class);
 		assertNotNull(queue);
-		assertNotSame("spam", queue.getName());
 		assertEquals("bar", queue.getName());
 	}
 
@@ -80,9 +91,17 @@ public final class RabbitNamespaceHandlerTests {
 	public void testBindings() throws Exception {
 		Map<String, Binding> bindings = beanFactory.getBeansOfType(Binding.class);
 		// 4 for each exchange type
-		assertEquals(17, bindings.size());
+		assertEquals(13, bindings.size());
+		for (Map.Entry<String, Binding> bindingEntry : bindings.entrySet()) {
+			Binding binding = bindingEntry.getValue();
+			if ("headers-test".equals(binding.getExchange()) && "bucket".equals(binding.getDestination())) {
+				Map<String, Object> arguments = binding.getArguments();
+				assertEquals(3, arguments.size());
+				break;
+			}
+		}
 	}
-	
+
 	@Test
 	public void testAdmin() throws Exception {
 		assertNotNull(beanFactory.getBean("admin-test", RabbitAdmin.class));

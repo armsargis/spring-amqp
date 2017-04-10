@@ -1,14 +1,17 @@
 /*
- * Copyright 2002-2010 the original author or authors.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Copyright 2002-2017 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package org.springframework.amqp.rabbit.connection;
@@ -26,15 +29,21 @@ import com.rabbitmq.client.Channel;
 /**
  * Helper class for managing a Spring based Rabbit {@link org.springframework.amqp.rabbit.connection.ConnectionFactory},
  * in particular for obtaining transactional Rabbit resources for a given ConnectionFactory.
- * 
+ *
  * <p>
  * Mainly for internal use within the framework. Used by {@link org.springframework.amqp.rabbit.core.RabbitTemplate} as
  * well as {@link org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer}.
- * 
+ *
  * @author Mark Fisher
  * @author Dave Syer
+ * @author Gary Russell
+ * @author Artem Bilan
  */
-public class ConnectionFactoryUtils {
+public final class ConnectionFactoryUtils {
+
+	private ConnectionFactoryUtils() {
+		super();
+	}
 
 	/**
 	 * Determine whether the given RabbitMQ Channel is transactional, that is, bound to the current thread by Spring's
@@ -64,28 +73,34 @@ public class ConnectionFactoryUtils {
 	public static RabbitResourceHolder getTransactionalResourceHolder(final ConnectionFactory connectionFactory,
 			final boolean synchedLocalTransactionAllowed) {
 
-		RabbitResourceHolder holder = doGetTransactionalResourceHolder(connectionFactory, new ResourceFactory() {
+		return doGetTransactionalResourceHolder(connectionFactory, new ResourceFactory() {
+
+			@Override
 			public Channel getChannel(RabbitResourceHolder holder) {
 				return holder.getChannel();
 			}
 
+			@Override
 			public Connection getConnection(RabbitResourceHolder holder) {
 				return holder.getConnection();
 			}
 
+			@Override
 			public Connection createConnection() throws IOException {
 				return connectionFactory.createConnection();
 			}
 
+			@Override
 			public Channel createChannel(Connection con) throws IOException {
 				return con.createChannel(synchedLocalTransactionAllowed);
 			}
 
+			@Override
 			public boolean isSynchedLocalTransactionAllowed() {
 				return synchedLocalTransactionAllowed;
 			}
+
 		});
-		return holder;
 	}
 
 	/**
@@ -113,15 +128,21 @@ public class ConnectionFactoryUtils {
 		if (resourceHolderToUse == null) {
 			resourceHolderToUse = new RabbitResourceHolder();
 		}
-		Connection connection = resourceFactory.getConnection(resourceHolderToUse);
+		Connection connection = resourceFactory.getConnection(resourceHolderToUse); //NOSONAR
 		Channel channel = null;
 		try {
-			boolean isExistingCon = (connection != null);
-			if (!isExistingCon) {
+			/*
+			 * If we are in a listener container, first see if there's a channel registered
+			 * for this consumer and the consumer is using the same connection factory.
+			 */
+			channel = ConsumerChannelRegistry.getConsumerChannel(connectionFactory);
+			if (channel == null && connection == null) {
 				connection = resourceFactory.createConnection();
 				resourceHolderToUse.addConnection(connection);
 			}
-			channel = resourceFactory.createChannel(connection);
+			if (channel == null) {
+				channel = resourceFactory.createChannel(connection);
+			}
 			resourceHolderToUse.addChannel(channel, connection);
 
 			if (resourceHolderToUse != resourceHolder) {
@@ -131,8 +152,8 @@ public class ConnectionFactoryUtils {
 
 			return resourceHolderToUse;
 
-		} catch (IOException ex) {
-			RabbitUtils.closeChannel(channel);
+		}
+		catch (IOException ex) {
 			RabbitUtils.closeConnection(connection);
 			throw new AmqpIOException(ex);
 		}
@@ -146,25 +167,22 @@ public class ConnectionFactoryUtils {
 		RabbitUtils.closeConnection(resourceHolder.getConnection());
 	}
 
-	public static void bindResourceToTransaction(RabbitResourceHolder resourceHolder,
+	public static RabbitResourceHolder bindResourceToTransaction(RabbitResourceHolder resourceHolder,
 			ConnectionFactory connectionFactory, boolean synched) {
 		if (TransactionSynchronizationManager.hasResource(connectionFactory)
 				|| !TransactionSynchronizationManager.isActualTransactionActive() || !synched) {
-			return;
+			return (RabbitResourceHolder) TransactionSynchronizationManager.getResource(connectionFactory);
 		}
 		TransactionSynchronizationManager.bindResource(connectionFactory, resourceHolder);
 		resourceHolder.setSynchronizedWithTransaction(true);
 		if (TransactionSynchronizationManager.isSynchronizationActive()) {
 			TransactionSynchronizationManager.registerSynchronization(new RabbitResourceSynchronization(resourceHolder,
-					connectionFactory, synched));
+					connectionFactory));
 		}
+		return resourceHolder;
 	}
 
-	/**
-	 * 
-	 */
-	public static void registerDeliveryTag(ConnectionFactory connectionFactory, Channel channel, Long tag)
-			throws IOException {
+	public static void registerDeliveryTag(ConnectionFactory connectionFactory, Channel channel, Long tag) {
 
 		Assert.notNull(connectionFactory, "ConnectionFactory must not be null");
 
@@ -217,6 +235,7 @@ public class ConnectionFactoryUtils {
 		 * @return whether to allow for synchronizing a local RabbitMQ transaction
 		 */
 		boolean isSynchedLocalTransactionAllowed();
+
 	}
 
 	/**
@@ -224,39 +243,41 @@ public class ConnectionFactoryUtils {
 	 * JtaTransactionManager transaction).
 	 * @see org.springframework.transaction.jta.JtaTransactionManager
 	 */
-	private static class RabbitResourceSynchronization extends
+	private static final class RabbitResourceSynchronization extends
 			ResourceHolderSynchronization<RabbitResourceHolder, Object> {
-
-		private final boolean transacted;
 
 		private final RabbitResourceHolder resourceHolder;
 
-		public RabbitResourceSynchronization(RabbitResourceHolder resourceHolder, Object resourceKey, boolean transacted) {
+		RabbitResourceSynchronization(RabbitResourceHolder resourceHolder, Object resourceKey) {
 			super(resourceHolder, resourceKey);
 			this.resourceHolder = resourceHolder;
-			this.transacted = transacted;
 		}
 
+		@Override
 		protected boolean shouldReleaseBeforeCompletion() {
-			return !this.transacted;
-		}
-
-		protected void processResourceAfterCommit(RabbitResourceHolder resourceHolder) {
-			resourceHolder.commitAll();
+			return false;
 		}
 
 		@Override
 		public void afterCompletion(int status) {
-			if (status != TransactionSynchronization.STATUS_COMMITTED) {
-				resourceHolder.rollbackAll();
+			if (status == TransactionSynchronization.STATUS_COMMITTED) {
+				this.resourceHolder.commitAll();
 			}
-			// resourceHolder.setSynchronizedWithTransaction(false);
+			else {
+				this.resourceHolder.rollbackAll();
+			}
+
+			if (this.resourceHolder.isReleaseAfterCompletion()) {
+				this.resourceHolder.setSynchronizedWithTransaction(false);
+			}
 			super.afterCompletion(status);
 		}
 
+		@Override
 		protected void releaseResource(RabbitResourceHolder resourceHolder, Object resourceKey) {
 			ConnectionFactoryUtils.releaseResources(resourceHolder);
 		}
+
 	}
 
 }

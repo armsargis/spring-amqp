@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2012 the original author or authors.
+ * Copyright 2002-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,10 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.springframework.amqp.rabbit.support;
 
 import java.io.IOException;
-import java.util.SortedMap;
+import java.util.Collection;
 
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
@@ -31,33 +32,47 @@ import com.rabbitmq.client.Channel;
  */
 public interface PublisherCallbackChannel extends Channel {
 
-	static String RETURN_CORRELATION = "spring_return_correlation";
+	String RETURN_CORRELATION_KEY = "spring_listener_return_correlation";
 
 	/**
-	 * Adds a {@link Listener} and returns a reference to
-	 * the pending confirms map for that listener's pending
-	 * confirms, allowing the Listener to
-	 * assess unconfirmed sends at any point in time.
-	 * The client must <b>NOT</b> modify the contents of
-	 * this array, and must synchronize on it when
-	 * iterating over its collections.
+	 * Adds a {@link Listener}.
 	 * @param listener The Listener.
-	 * @return A reference to pending confirms for the listener
 	 */
-	SortedMap<Long, PendingConfirm> addListener(Listener listener);
+	void addListener(Listener listener);
 
 	/**
-	 * Gets a reference to the current listener, or null.
-	 * @return the Listener.
+	 * Expire (remove) any {@link PendingConfirm}s created before cutoffTime for the
+	 * supplied listener and return them to the caller.
+	 * @param listener the listener.
+	 * @param cutoffTime the time before which expired messages were created.
+	 * @return the list of expired confirms.
 	 */
-	boolean removeListener(Listener listener);
+	Collection<PendingConfirm> expire(Listener listener, long cutoffTime);
+
+    /**
+     * Get the {@link PendingConfirm}s count.
+     * @param listener the listener.
+     * @return Count of the pending confirms.
+     */
+
+    int getPendingConfirmsCount(Listener listener);
 
 	/**
 	 * Adds a pending confirmation to this channel's map.
+	 *
+	 * @param listener The listener.
 	 * @param seq The key to the map.
 	 * @param pendingConfirm The PendingConfirm object.
 	 */
 	void addPendingConfirm(Listener listener, long seq, PendingConfirm pendingConfirm);
+
+	/**
+	 * Use this to invoke methods on the underlying rabbit client {@link Channel} that
+	 * are not supported by this implementation.
+	 * @return The underlying rabbit client {@link Channel}.
+	 * @since 1.4.
+	 */
+	Channel getDelegate();
 
 	/**
 	 * Listeners implementing this interface can participate
@@ -66,7 +81,7 @@ public interface PublisherCallbackChannel extends Channel {
 	 * AMQP channels do not support a listener being
 	 * registered on multiple channels.
 	 */
-	public static interface Listener {
+	public interface Listener {
 
 		/**
 		 * Invoked by the channel when a confirm is received.
@@ -84,11 +99,12 @@ public interface PublisherCallbackChannel extends Channel {
 				byte[] body) throws IOException;
 
 		/**
-		 * When called, this listener must remove all references to the
-		 * pending confirm map.
-		 * @param unconfirmed The pending confirm map.
+		 * When called, this listener should remove all references to the
+		 * channel - it will no longer be invoked by the channel.
+		 *
+		 * @param channel The channel.
 		 */
-		void removePendingConfirmsReference(Channel channel, SortedMap<Long, PendingConfirm> unconfirmed);
+		void revoke(Channel channel);
 
 		/**
 		 * Returns the UUID used to identify this Listener for returns.

@@ -1,10 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<beans xmlns="http://www.springframework.org/schema/beans" xmlns:beans="http://www.springframework.org/schema/beans"
-	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:rabbit="http://www.springframework.org/schema/rabbit"
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:beans="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:rabbit="http://www.springframework.org/schema/rabbit"
+	xmlns:util="http://www.springframework.org/schema/util"
 	xsi:schemaLocation="http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit.xsd
-		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
+		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+		http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util.xsd">
 
-	<rabbit:direct-exchange name="direct" />
+
+	<rabbit:direct-exchange name="direct" auto-declare="false" declared-by="admin1, admin2">
+		<rabbit:bindings>
+			<rabbit:binding key="foo" queue="bar">
+				<rabbit:binding-arguments>
+					<entry key="x-match" value="any"/>
+				</rabbit:binding-arguments>
+			</rabbit:binding>
+		</rabbit:bindings>
+	</rabbit:direct-exchange>
+
+	<rabbit:queue id="bar" />
 
 	<rabbit:direct-exchange id="alias" name="direct-alias" />
 
@@ -16,38 +31,27 @@
 		</exchange-arguments>
 	</direct-exchange>
 
-	<rabbit:topic-exchange name="topic" />
+	<util:map id="myRefArguments">
+		<beans:entry key="foo" value="bar" />
+	</util:map>
 
-	<rabbit:fanout-exchange name="fanout"/>
+	<direct-exchange name="direct-ref-arguments" xmlns="http://www.springframework.org/schema/rabbit">
+		<rabbit:exchange-arguments ref="myRefArguments"/>
+	</direct-exchange>
 
-	<rabbit:headers-exchange name="headers" xmlns="http://www.springframework.org/schema/rabbit"/>
+	<rabbit:topic-exchange name="topic" declared-by="admin1" delayed="true" internal="true"/>
 
-	<rabbit:federated-exchange name="fedDirect" backing-type="direct"
-			upstream-set="upstream-set1">
-		<rabbit:direct-bindings>
-			<rabbit:binding key="x" queue="dirQ" />
-		</rabbit:direct-bindings>
-	</rabbit:federated-exchange>
+	<rabbit:fanout-exchange name="fanout" declared-by="admin2" />
 
-	<rabbit:federated-exchange name="fedTopic" backing-type="topic"
-			upstream-set="upstream-set2">
-		<rabbit:topic-bindings>
-			<rabbit:binding pattern="xx.*" queue="topic" />
-		</rabbit:topic-bindings>
-	</rabbit:federated-exchange>
+	<rabbit:headers-exchange name="headers" xmlns="http://www.springframework.org/schema/rabbit"
+		declared-by="admin2" />
 
-	<rabbit:federated-exchange name="fedFanout" backing-type="fanout"
-			upstream-set="upstream-set3">
-		<rabbit:fanout-bindings>
-			<rabbit:binding queue="fan" />
-		</rabbit:fanout-bindings>
-	</rabbit:federated-exchange>
+	<rabbit:admin id="admin1" auto-startup="false" connection-factory="mockCF" />
 
-	<rabbit:federated-exchange name="fedHeaders" backing-type="headers"
-			upstream-set="upstream-set4">
-		<rabbit:headers-bindings>
-			<rabbit:binding key="head" value="head" queue="head" />
-		</rabbit:headers-bindings>
-	</rabbit:federated-exchange>
+	<rabbit:admin id="admin2" auto-startup="false" connection-factory="mockCF" />
+
+	<bean id="mockCF" class="org.mockito.Mockito" factory-method="mock">
+		<constructor-arg value="org.springframework.amqp.rabbit.connection.ConnectionFactory" />
+	</bean>
 
 </beans>

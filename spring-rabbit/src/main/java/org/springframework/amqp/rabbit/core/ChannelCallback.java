@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2010 the original author or authors.
+ * Copyright 2002-2017 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,15 +19,23 @@ package org.springframework.amqp.rabbit.core;
 import com.rabbitmq.client.Channel;
 
 /**
- * Basic callback for use in RabbitTemplate
+ * Basic callback for use in RabbitTemplate.
+ * @param <T> the type the callback returns.
+ *
  * @author Mark Fisher
+ * @author Gary Russell
  */
+@FunctionalInterface
 public interface ChannelCallback<T> {
 
 	/**
 	 * Execute any number of operations against the supplied RabbitMQ
 	 * {@link Channel}, possibly returning a result.
+	 *
+	 * @param channel The channel.
+	 * @return The result.
+	 * @throws Exception Not sure what else Rabbit Throws
 	 */
-	T doInRabbit(Channel channel) throws Exception;  //Not sure what else Rabbit Throws..
+	T doInRabbit(Channel channel) throws Exception;
 
 }

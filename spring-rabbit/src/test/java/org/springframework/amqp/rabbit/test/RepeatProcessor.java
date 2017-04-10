@@ -1,14 +1,17 @@
 /*
- * Copyright 2002-2010 the original author or authors.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Copyright 2002-2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package org.springframework.amqp.rabbit.test;
@@ -36,6 +39,7 @@ import org.junit.rules.MethodRule;
 import org.junit.runners.model.FrameworkMethod;
 import org.junit.runners.model.Statement;
 import org.junit.runners.model.TestClass;
+
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.test.annotation.Repeat;
 
@@ -43,10 +47,9 @@ import org.springframework.test.annotation.Repeat;
  * A JUnit method &#064;Rule that looks at Spring repeat annotations on methods and executes the test multiple times
  * (without re-initializing the test case if necessary). To avoid re-initializing use the {@link #isInitialized()}
  * method to protect the &#64;Before and &#64;After methods.
- * 
+ *
  * @author Dave Syer
- * @since 2.0
- * 
+ *
  */
 public class RepeatProcessor implements MethodRule {
 
@@ -88,11 +91,13 @@ public class RepeatProcessor implements MethodRule {
 						for (int i = 0; i < repeats; i++) {
 							try {
 								base.evaluate();
-							} catch (Throwable t) {
+							}
+							catch (Throwable t) {
 								throw new IllegalStateException("Failed on iteration: " + i + " of " + repeats + " (started at 0)", t);
 							}
 						}
-					} finally {
+					}
+					finally {
 						finalizeIfNecessary(target);
 					}
 				}
@@ -111,7 +116,8 @@ public class RepeatProcessor implements MethodRule {
 							public Boolean call() {
 								try {
 									base.evaluate();
-								} catch (Throwable t) {
+								}
+								catch (Throwable t) {
 									throw new IllegalStateException("Failed on iteration: " + count, t);
 								}
 								return true;
@@ -122,7 +128,8 @@ public class RepeatProcessor implements MethodRule {
 						Future<Boolean> future = completionService.take();
 						assertTrue("Null result from completer", future.get());
 					}
-				} finally {
+				}
+				finally {
 					executor.shutdownNow();
 					finalizeIfNecessary(target);
 				}
@@ -138,14 +145,17 @@ public class RepeatProcessor implements MethodRule {
 				logger.debug("Running @After methods");
 				try {
 					new RunAfters(new Statement() {
+						@Override
 						public void evaluate() {
 						}
 					}, afters, target).evaluate();
-				} catch (Throwable e) {
+				}
+				catch (Throwable e) {
 					Assert.assertThat(e, CoreMatchers.not(CoreMatchers.anything()));
 				}
 			}
-		} finally {
+		}
+		finally {
 			finalizing = false;
 		}
 	}
@@ -157,10 +167,12 @@ public class RepeatProcessor implements MethodRule {
 			logger.debug("Running @Before methods");
 			try {
 				new RunBefores(new Statement() {
+					@Override
 					public void evaluate() {
 					}
 				}, befores, target).evaluate();
-			} catch (Throwable e) {
+			}
+			catch (Throwable e) {
 				Assert.assertThat(e, CoreMatchers.not(CoreMatchers.anything()));
 			}
 			initialized = true;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2010 the original author or authors.
+ * Copyright 2002-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,11 @@ import com.rabbitmq.client.Channel;
 
 /**
  * A message listener that is aware of the Channel on which the message was received.
- *  
+ *
  * @author Mark Pollack
+ * @author Gary Russell
  */
+@FunctionalInterface
 public interface ChannelAwareMessageListener {
 
 	/**
@@ -33,7 +35,7 @@ public interface ChannelAwareMessageListener {
 	 * typically sending reply messages through the given Session.
 	 * @param message the received AMQP message (never <code>null</code>)
 	 * @param channel the underlying Rabbit Channel (never <code>null</code>)
-	 * @throws Exception 
+	 * @throws Exception Any.
 	 */
 	void onMessage(Message message, Channel channel) throws Exception;
 

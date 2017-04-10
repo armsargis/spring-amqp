@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2010 the original author or authors.
+ * Copyright 2002-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,10 +19,11 @@ package org.springframework.amqp.rabbit.connection;
 import com.rabbitmq.client.Channel;
 
 /**
- * Subinterface of {@link com.rabbitmq.client.Channel} to be implemented by 
+ * Subinterface of {@link com.rabbitmq.client.Channel} to be implemented by
  * Channel proxies.  Allows access to the underlying target Channel
- * 
+ *
  * @author Mark Pollack
+ * @author Gary Russell
  * @see CachingConnectionFactory
  */
 public interface ChannelProxy extends Channel {
@@ -33,4 +34,12 @@ public interface ChannelProxy extends Channel {
 	 * @return the underlying Channel (never <code>null</code>)
 	 */
 	Channel getTargetChannel();
+
+	/**
+	 * Return whether this channel has transactions enabled {@code txSelect()}.
+	 * @return true if the channel is transactional.
+	 * @since 1.5
+	 */
+	boolean isTransactional();
+
 }

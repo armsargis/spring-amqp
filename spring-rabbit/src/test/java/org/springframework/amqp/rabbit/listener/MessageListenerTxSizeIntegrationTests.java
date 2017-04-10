@@ -1,3 +1,19 @@
+/*
+ * Copyright 2002-2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.springframework.amqp.rabbit.listener;
 
 import static org.junit.Assert.assertNull;
@@ -8,52 +24,63 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.log4j.Level;
+import org.apache.logging.log4j.Level;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.junit.BrokerRunning;
+import org.springframework.amqp.rabbit.junit.BrokerTestUtils;
 import org.springframework.amqp.rabbit.listener.adapter.MessageListenerAdapter;
-import org.springframework.amqp.rabbit.test.BrokerRunning;
-import org.springframework.amqp.rabbit.test.BrokerTestUtils;
-import org.springframework.amqp.rabbit.test.Log4jLevelAdjuster;
+import org.springframework.amqp.rabbit.test.LogLevelAdjuster;
+import org.springframework.beans.factory.DisposableBean;
 
 import com.rabbitmq.client.Channel;
 
+/**
+ * @author Dave Syer
+ * @author Gunnar Hillert
+ * @author Gary Russell
+ *
+ * @since 1.0
+ *
+ */
 public class MessageListenerTxSizeIntegrationTests {
 
 	private static Log logger = LogFactory.getLog(MessageListenerTxSizeIntegrationTests.class);
 
-	private Queue queue = new Queue("test.queue");
+	private final Queue queue = new Queue("test.queue");
 
-	private RabbitTemplate template = new RabbitTemplate();
+	private final RabbitTemplate template = new RabbitTemplate();
 
-	private int concurrentConsumers = 1;
+	private final int concurrentConsumers = 1;
 
-	private int messageCount = 12;
+	private final int messageCount = 12;
 
-	private int txSize = 4;
-	
+	private final int txSize = 4;
+
 	private boolean transactional = true;
-	
+
 	private SimpleMessageListenerContainer container;
 
 	@Rule
-	public Log4jLevelAdjuster logLevels = new Log4jLevelAdjuster(Level.DEBUG, RabbitTemplate.class,
+	public LogLevelAdjuster logLevels = new LogLevelAdjuster(Level.ERROR, RabbitTemplate.class,
 			SimpleMessageListenerContainer.class, BlockingQueueConsumer.class);
 
 	@Rule
-	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue);
+	public BrokerRunning brokerIsRunning = BrokerRunning.isRunningWithEmptyQueues(queue.getName());
 
 	@Before
 	public void createConnectionFactory() {
 		CachingConnectionFactory connectionFactory = new CachingConnectionFactory();
+		connectionFactory.setHost("localhost");
 		connectionFactory.setChannelCacheSize(concurrentConsumers);
 		connectionFactory.setPort(BrokerTestUtils.getPort());
 		template.setConnectionFactory(connectionFactory);
@@ -67,6 +94,9 @@ public class MessageListenerTxSizeIntegrationTests {
 		if (container != null) {
 			container.shutdown();
 		}
+
+		((DisposableBean) template.getConnectionFactory()).destroy();
+		this.brokerIsRunning.removeTestQueues();
 	}
 
 	@Test
@@ -114,8 +144,8 @@ public class MessageListenerTxSizeIntegrationTests {
 	}
 
 	public class TestListener implements ChannelAwareMessageListener {
-		
-		private ThreadLocal<Integer> count = new ThreadLocal<Integer>();
+
+		private final ThreadLocal<Integer> count = new ThreadLocal<Integer>();
 
 		private final CountDownLatch latch;
 
@@ -129,21 +159,24 @@ public class MessageListenerTxSizeIntegrationTests {
 		public void handleMessage(String value) {
 		}
 
+		@Override
 		public void onMessage(Message message, Channel channel) throws Exception {
 			String value = new String(message.getBody());
 			try {
 				logger.debug("Received: " + value);
-				if (count.get()==null) {
+				if (count.get() == null) {
 					count.set(1);
-				} else {
-					count.set(count.get()+1);
 				}
-				if (count.get()==txSize && fail) {
+				else {
+					count.set(count.get() + 1);
+				}
+				if (count.get() == txSize && fail) {
 					logger.debug("Failing: " + value);
 					count.set(0);
 					throw new RuntimeException("Planned");
 				}
-			} finally {
+			}
+			finally {
 				latch.countDown();
 			}
 		}

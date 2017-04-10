@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2012 the original author or authors.
+ * Copyright 2002-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,29 +21,38 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Map;
+
 import org.junit.Before;
 import org.junit.Test;
+
+import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.FanoutExchange;
-import org.springframework.amqp.core.FederatedExchange;
 import org.springframework.amqp.core.HeadersExchange;
 import org.springframework.amqp.core.TopicExchange;
-import org.springframework.beans.factory.xml.XmlBeanFactory;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.beans.factory.xml.XmlBeanDefinitionReader;
 import org.springframework.core.io.ClassPathResource;
+
 /**
  * @author Dave Syer
  * @author Mark Fisher
  * @author Gary Russell
+ * @author Felipe Gutierrez
+ * @author Artem Bilan
  * @since 1.0
  *
  */
 public final class ExchangeParserTests {
 
-	private XmlBeanFactory beanFactory;
+	private DefaultListableBeanFactory beanFactory;
 
 	@Before
 	public void setUp() throws Exception {
-		beanFactory = new XmlBeanFactory(new ClassPathResource(getClass().getSimpleName()+"-context.xml", getClass()));
+		beanFactory = new DefaultListableBeanFactory();
+		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(beanFactory);
+		reader.loadBeanDefinitions(new ClassPathResource(getClass().getSimpleName() + "-context.xml", getClass()));
 	}
 
 	@Test
@@ -53,6 +62,19 @@ public final class ExchangeParserTests {
 		assertEquals("direct", exchange.getName());
 		assertTrue(exchange.isDurable());
 		assertFalse(exchange.isAutoDelete());
+		assertFalse(exchange.shouldDeclare());
+		assertEquals(2, exchange.getDeclaringAdmins().size());
+		Binding binding =
+				beanFactory.getBean("org.springframework.amqp.rabbit.config.BindingFactoryBean#0", Binding.class);
+		assertFalse(binding.shouldDeclare());
+		assertEquals(2, binding.getDeclaringAdmins().size());
+
+		Map<String, Object> arguments = binding.getArguments();
+		assertNotNull(arguments);
+		assertEquals(1, arguments.size());
+		assertTrue(arguments.containsKey("x-match"));
+		assertEquals("any", arguments.get("x-match"));
+
 	}
 
 	@Test
@@ -71,6 +93,11 @@ public final class ExchangeParserTests {
 		assertEquals("topic", exchange.getName());
 		assertTrue(exchange.isDurable());
 		assertFalse(exchange.isAutoDelete());
+		assertTrue(exchange.shouldDeclare());
+		assertTrue(exchange.isDelayed());
+		assertTrue(exchange.isInternal());
+		assertEquals(1, exchange.getDeclaringAdmins().size());
+
 	}
 
 	@Test
@@ -80,6 +107,10 @@ public final class ExchangeParserTests {
 		assertEquals("fanout", exchange.getName());
 		assertTrue(exchange.isDurable());
 		assertFalse(exchange.isAutoDelete());
+		assertTrue(exchange.shouldDeclare());
+		assertFalse(exchange.isDelayed());
+		assertEquals(1, exchange.getDeclaringAdmins().size());
+
 	}
 
 	@Test
@@ -89,6 +120,9 @@ public final class ExchangeParserTests {
 		assertEquals("headers", exchange.getName());
 		assertTrue(exchange.isDurable());
 		assertFalse(exchange.isAutoDelete());
+		assertTrue(exchange.shouldDeclare());
+		assertEquals(1, exchange.getDeclaringAdmins().size());
+
 	}
 
 	@Test
@@ -109,47 +143,11 @@ public final class ExchangeParserTests {
 	}
 
 	@Test
-	public void testFederatedDirectExchange() throws Exception {
-		FederatedExchange exchange = beanFactory.getBean("fedDirect", FederatedExchange.class);
+	public void testDirectExchangeWithReferencedArguments() throws Exception {
+		DirectExchange exchange = beanFactory.getBean("direct-ref-arguments", DirectExchange.class);
 		assertNotNull(exchange);
-		assertEquals("fedDirect", exchange.getName());
-		assertTrue(exchange.isDurable());
-		assertFalse(exchange.isAutoDelete());
-		assertEquals("direct", exchange.getArguments().get("type"));
-		assertEquals("upstream-set1", exchange.getArguments().get("upstream-set"));
-	}
-
-	@Test
-	public void testFederatedTopicExchange() throws Exception {
-		FederatedExchange exchange = beanFactory.getBean("fedTopic", FederatedExchange.class);
-		assertNotNull(exchange);
-		assertEquals("fedTopic", exchange.getName());
-		assertTrue(exchange.isDurable());
-		assertFalse(exchange.isAutoDelete());
-		assertEquals("topic", exchange.getArguments().get("type"));
-		assertEquals("upstream-set2", exchange.getArguments().get("upstream-set"));
-	}
-
-	@Test
-	public void testFederatedFanoutExchange() throws Exception {
-		FederatedExchange exchange = beanFactory.getBean("fedFanout", FederatedExchange.class);
-		assertNotNull(exchange);
-		assertEquals("fedFanout", exchange.getName());
-		assertTrue(exchange.isDurable());
-		assertFalse(exchange.isAutoDelete());
-		assertEquals("fanout", exchange.getArguments().get("type"));
-		assertEquals("upstream-set3", exchange.getArguments().get("upstream-set"));
-	}
-
-	@Test
-	public void testFederatedHeadersExchange() throws Exception {
-		FederatedExchange exchange = beanFactory.getBean("fedHeaders", FederatedExchange.class);
-		assertNotNull(exchange);
-		assertEquals("fedHeaders", exchange.getName());
-		assertTrue(exchange.isDurable());
-		assertFalse(exchange.isAutoDelete());
-		assertEquals("headers", exchange.getArguments().get("type"));
-		assertEquals("upstream-set4", exchange.getArguments().get("upstream-set"));
+		assertEquals("direct-ref-arguments", exchange.getName());
+		assertEquals("bar", exchange.getArguments().get("foo"));
 	}
 
 }

@@ -1,23 +1,27 @@
 /*
- * Copyright 2002-2010 the original author or authors.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Copyright 2002-2017 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package org.springframework.amqp.rabbit.config;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.retry.MessageRecoverer;
 import org.springframework.retry.RetryOperations;
-import org.springframework.retry.interceptor.MethodInvocationRecoverer;
 import org.springframework.retry.interceptor.RetryOperationsInterceptor;
 import org.springframework.retry.support.RetryTemplate;
 
@@ -30,16 +34,17 @@ import org.springframework.retry.support.RetryTemplate;
  * retry attempts are exhausted it can be processed using a {@link MessageRecoverer} if one is provided, in the same
  * transaction (in which case no exception is propagated). If a recoverer is not provided the exception will be
  * propagated and the message may be redelivered if the channel is transactional.
- * 
- * @see RetryOperations#execute(org.springframework.retry.RetryCallback, org.springframework.retry.RecoveryCallback)
- * 
+ *
  * @author Dave Syer
- * 
+ * @author Gary Russell
+ *
+ * @see RetryOperations#execute(org.springframework.retry.RetryCallback, org.springframework.retry.RecoveryCallback)
  */
 public class StatelessRetryOperationsInterceptorFactoryBean extends AbstractRetryOperationsInterceptorFactoryBean {
 
 	private static Log logger = LogFactory.getLog(StatelessRetryOperationsInterceptorFactoryBean.class);
 
+	@Override
 	public RetryOperationsInterceptor getObject() {
 
 		RetryOperationsInterceptor retryInterceptor = new RetryOperationsInterceptor();
@@ -50,26 +55,27 @@ public class StatelessRetryOperationsInterceptorFactoryBean extends AbstractRetr
 		retryInterceptor.setRetryOperations(retryTemplate);
 
 		final MessageRecoverer messageRecoverer = getMessageRecoverer();
-		retryInterceptor.setRecoverer(new MethodInvocationRecoverer<Void>() {
-			public Void recover(Object[] args, Throwable cause) {
-				Message message = (Message) args[1];
-				if (messageRecoverer == null) {
-					logger.warn("Message dropped on recovery: " + message, cause);
-				} else {
-					messageRecoverer.recover(message, cause);
-				}
-				return null;
+		retryInterceptor.setRecoverer((args, cause) -> {
+			Message message = (Message) args[1];
+			if (messageRecoverer == null) {
+				logger.warn("Message dropped on recovery: " + message, cause);
 			}
+			else {
+				messageRecoverer.recover(message, cause);
+			}
+			return null;
 		});
 
 		return retryInterceptor;
 
 	}
 
+	@Override
 	public Class<?> getObjectType() {
 		return RetryOperationsInterceptor.class;
 	}
 
+	@Override
 	public boolean isSingleton() {
 		return true;
 	}

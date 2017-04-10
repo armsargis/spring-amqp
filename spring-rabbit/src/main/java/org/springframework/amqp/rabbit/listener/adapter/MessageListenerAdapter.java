@@ -1,14 +1,17 @@
 /*
- * Copyright 2002-2010 the original author or authors.
+ * Copyright 2002-2015 the original author or authors.
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package org.springframework.amqp.rabbit.listener.adapter;
@@ -16,22 +19,16 @@ package org.springframework.amqp.rabbit.listener.adapter;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.AmqpIOException;
 import org.springframework.amqp.AmqpIllegalStateException;
-import org.springframework.amqp.core.Address;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageListener;
 import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.rabbit.connection.RabbitUtils;
 import org.springframework.amqp.rabbit.core.ChannelAwareMessageListener;
-import org.springframework.amqp.rabbit.listener.ListenerExecutionFailedException;
-import org.springframework.amqp.rabbit.support.DefaultMessagePropertiesConverter;
-import org.springframework.amqp.rabbit.support.MessagePropertiesConverter;
-import org.springframework.amqp.support.converter.MessageConversionException;
+import org.springframework.amqp.rabbit.listener.exception.ListenerExecutionFailedException;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.amqp.support.converter.SimpleMessageConverter;
 import org.springframework.util.Assert;
@@ -118,6 +115,8 @@ import com.rabbitmq.client.Channel;
  * @author Mark Pollack
  * @author Mark Fisher
  * @author Dave Syer
+ * @author Gary Russell
+ * @author Greg Turnquist
  *
  * @see #setDelegate
  * @see #setDefaultListenerMethod
@@ -127,43 +126,25 @@ import com.rabbitmq.client.Channel;
  * @see org.springframework.amqp.rabbit.core.ChannelAwareMessageListener
  * @see org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer#setMessageListener
  */
-public class MessageListenerAdapter implements MessageListener, ChannelAwareMessageListener {
+public class MessageListenerAdapter extends AbstractAdaptableMessageListener {
+
+	private final Map<String, String> queueOrTagToMethodName = new HashMap<String, String>();
 
 	/**
 	 * Out-of-the-box value for the default listener method: "handleMessage".
 	 */
 	public static final String ORIGINAL_DEFAULT_LISTENER_METHOD = "handleMessage";
 
-	private static final String DEFAULT_RESPONSE_ROUTING_KEY = "";
-
-	private static final String DEFAULT_ENCODING = "UTF-8";
-
-	/** Logger available to subclasses */
-	protected final Log logger = LogFactory.getLog(getClass());
 
 	private Object delegate;
 
 	private String defaultListenerMethod = ORIGINAL_DEFAULT_LISTENER_METHOD;
 
-	private String responseRoutingKey = DEFAULT_RESPONSE_ROUTING_KEY;
-
-	private String responseExchange = null;
-
-	private volatile boolean mandatoryPublish;
-
-	private volatile boolean immediatePublish;
-
-	private MessageConverter messageConverter;
-
-	private volatile MessagePropertiesConverter messagePropertiesConverter = new DefaultMessagePropertiesConverter();
-
-	private String encoding = DEFAULT_ENCODING;
 
 	/**
 	 * Create a new {@link MessageListenerAdapter} with default settings.
 	 */
 	public MessageListenerAdapter() {
-		initDefaultStrategies();
 		this.delegate = this;
 	}
 
@@ -172,8 +153,7 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 	 * @param delegate the delegate object
 	 */
 	public MessageListenerAdapter(Object delegate) {
-		initDefaultStrategies();
-		setDelegate(delegate);
+		doSetDelegate(delegate);
 	}
 
 	/**
@@ -182,42 +162,48 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 	 * @param messageConverter the message converter to use
 	 */
 	public MessageListenerAdapter(Object delegate, MessageConverter messageConverter) {
-		initDefaultStrategies();
-		setDelegate(delegate);
-		setMessageConverter(messageConverter);
+		doSetDelegate(delegate);
+		super.setMessageConverter(messageConverter);
+	}
+
+	/**
+	 * Create a new {@link MessageListenerAdapter} for the given delegate while also
+	 * declaring its POJO method.
+	 * @param delegate the delegate object
+	 * @param defaultListenerMethod name of the POJO method to call upon message receipt
+	 */
+	public MessageListenerAdapter(Object delegate, String defaultListenerMethod) {
+		this(delegate);
+		this.defaultListenerMethod = defaultListenerMethod;
 	}
 
 	/**
 	 * Set a target object to delegate message listening to. Specified listener methods have to be present on this
 	 * target object.
-	 * <p>
-	 * If no explicit delegate object has been specified, listener methods are expected to present on this adapter
+	 * <p> If no explicit delegate object has been specified, listener methods are expected to present on this adapter
 	 * instance, that is, on a custom subclass of this adapter, defining listener methods.
+	 * @param delegate The delegate listener or POJO.
 	 */
 	public void setDelegate(Object delegate) {
+		doSetDelegate(delegate);
+	}
+
+	private void doSetDelegate(Object delegate) {
 		Assert.notNull(delegate, "Delegate must not be null");
 		this.delegate = delegate;
 	}
 
 	/**
-	 * Return the target object to delegate message listening to.
+	 * @return The target object to delegate message listening to.
 	 */
 	protected Object getDelegate() {
 		return this.delegate;
 	}
 
 	/**
-	 * The encoding to use when inter-converting between byte arrays and Strings in message properties.
-	 *
-	 * @param encoding the encoding to set
-	 */
-	public void setEncoding(String encoding) {
-		this.encoding = encoding;
-	}
-
-	/**
 	 * Specify the name of the default listener method to delegate to, for the case where no specific listener method
 	 * has been determined. Out-of-the-box value is {@link #ORIGINAL_DEFAULT_LISTENER_METHOD "handleMessage"}.
+	 * @param defaultListenerMethod The name of the default listener method.
 	 * @see #getListenerMethodName
 	 */
 	public void setDefaultListenerMethod(String defaultListenerMethod) {
@@ -225,80 +211,46 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 	}
 
 	/**
-	 * Return the name of the default listener method to delegate to.
+	 * @return The name of the default listener method to delegate to.
 	 */
 	protected String getDefaultListenerMethod() {
 		return this.defaultListenerMethod;
 	}
 
-	/**
-	 * Set the routing key to use when sending response messages. This will be applied in case of a request message that
-	 * does not carry a "ReplyTo" property
-	 * <p>
-	 * Response destinations are only relevant for listener methods that return result objects, which will be wrapped in
-	 * a response message and sent to a response destination.
-	 */
-	public void setResponseRoutingKey(String responseRoutingKey) {
-		this.responseRoutingKey = responseRoutingKey;
-	}
 
 	/**
-	 * Set the exchange to use when sending response messages. This is only used if the exchange from the received
-	 * message is null.
-	 * <p>
-	 * Response destinations are only relevant for listener methods that return result objects, which will be wrapped in
-	 * a response message and sent to a response destination.
-	 * @param responseExchange
+	 * Set the mapping of queue name or consumer tag to method name. The first lookup
+	 * is by queue name, if that returns null, we lookup by consumer tag, if that
+	 * returns null, the {@link #setDefaultListenerMethod(String) defaultListenerMethod}
+	 * is used.
+	 * @param queueOrTagToMethodName the map.
+	 * @since 1.5
 	 */
-	public void setResponseExchange(String responseExchange) {
-		this.responseExchange = responseExchange;
+	public void setQueueOrTagToMethodName(Map<String, String> queueOrTagToMethodName) {
+		this.queueOrTagToMethodName.putAll(queueOrTagToMethodName);
 	}
 
 	/**
-	 * Set the converter that will convert incoming Rabbit messages to listener method arguments, and objects returned
-	 * from listener methods back to Rabbit messages.
-	 * <p>
-	 * The default converter is a {@link SimpleMessageConverter}, which is able to handle "text" content-types.
+	 * Add the mapping of a queue name or consumer tag to a method name. The first lookup
+	 * is by queue name, if that returns null, we lookup by consumer tag, if that
+	 * returns null, the {@link #setDefaultListenerMethod(String) defaultListenerMethod}
+	 * is used.
+	 * @param queueOrTag The queue name or consumer tag.
+	 * @param methodName The method name.
+	 * @since 1.5
 	 */
-	public void setMessageConverter(MessageConverter messageConverter) {
-		this.messageConverter = messageConverter;
+	public void addQueueOrTagToMethodName(String queueOrTag, String methodName) {
+		this.queueOrTagToMethodName.put(queueOrTag, methodName);
 	}
 
 	/**
-	 * Return the converter that will convert incoming Rabbit messages to listener method arguments, and objects
-	 * returned from listener methods back to Rabbit messages.
+	 * Remove the mapping of a queue name or consumer tag to a method name.
+	 * @param queueOrTag The queue name or consumer tag.
+	 * @return the method name that was removed, or null.
+	 * @since 1.5
 	 */
-	protected MessageConverter getMessageConverter() {
-		return this.messageConverter;
-	}
-
-	public void setMandatoryPublish(boolean mandatoryPublish) {
-		this.mandatoryPublish = mandatoryPublish;
-	}
-
-	public void setImmediatePublish(boolean immediatePublish) {
-		this.immediatePublish = immediatePublish;
-	}
-
-	/**
-	 * Rabbit {@link MessageListener} entry point.
-	 * <p>
-	 * Delegates the message to the target listener method, with appropriate conversion of the message argument. In case
-	 * of an exception, the {@link #handleListenerException(Throwable)} method will be invoked.
-	 * <p>
-	 * <b>Note:</b> Does not support sending response messages based on result objects returned from listener methods.
-	 * Use the {@link ChannelAwareMessageListener} entry point (typically through a Spring message listener container)
-	 * for handling result objects as well.
-	 * @param message the incoming Rabbit message
-	 * @see #handleListenerException
-	 * @see #onMessage(Message, Channel)
-	 */
-	public void onMessage(Message message) {
-		try {
-			onMessage(message, null);
-		} catch (Throwable ex) {
-			handleListenerException(ex);
-		}
+	public String removeQueueOrTagToMethodName(String queueOrTag) {
+		return this.queueOrTagToMethodName.remove(queueOrTag);
 	}
 
 	/**
@@ -310,6 +262,7 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 	 * @param channel the Rabbit channel to operate on
 	 * @throws Exception if thrown by Rabbit API methods
 	 */
+	@Override
 	public void onMessage(Message message, Channel channel) throws Exception {
 		// Check whether the delegate is a MessageListener impl itself.
 		// In that case, the adapter will simply act as a pass-through.
@@ -319,7 +272,8 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 				if (channel != null) {
 					((ChannelAwareMessageListener) delegate).onMessage(message, channel);
 					return;
-				} else if (!(delegate instanceof MessageListener)) {
+				}
+				else if (!(delegate instanceof MessageListener)) {
 					throw new AmqpIllegalStateException("MessageListenerAdapter cannot handle a "
 							+ "ChannelAwareMessageListener delegate if it hasn't been invoked with a Channel itself");
 				}
@@ -341,62 +295,41 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 
 		// Invoke the handler method with appropriate arguments.
 		Object[] listenerArguments = buildListenerArguments(convertedMessage);
-		Object result = invokeListenerMethod(methodName, listenerArguments);
+		Object result = invokeListenerMethod(methodName, listenerArguments, message);
 		if (result != null) {
 			handleResult(result, message, channel);
-		} else {
+		}
+		else {
 			logger.trace("No result object given - no result to handle");
 		}
 	}
 
 	/**
-	 * Initialize the default implementations for the adapter's strategies.
-	 * @see #setMessageConverter
-	 * @see org.springframework.amqp.support.converter.SimpleMessageConverter
-	 */
-	protected void initDefaultStrategies() {
-		setMessageConverter(new SimpleMessageConverter());
-	}
-
-	/**
-	 * Handle the given exception that arose during listener execution. The default implementation logs the exception at
-	 * error level.
+	 * Determine the name of the listener method that will handle the given message.
 	 * <p>
-	 * This method only applies when using a Rabbit {@link MessageListener}. With
-	 * {@link ChannelAwareMessageListener}, exceptions get handled by the
-	 * caller instead.
-	 * @param ex the exception to handle
-	 * @see #onMessage(Message)
-	 */
-	protected void handleListenerException(Throwable ex) {
-		logger.error("Listener execution failed", ex);
-	}
-
-	/**
-	 * Extract the message body from the given Rabbit message.
-	 * @param message the Rabbit <code>Message</code>
-	 * @return the content of the message, to be passed into the listener method as argument
-	 * @throws Exception if thrown by Rabbit API methods
-	 */
-	protected Object extractMessage(Message message) throws Exception {
-		MessageConverter converter = getMessageConverter();
-		if (converter != null) {
-			return converter.fromMessage(message);
-		}
-		return message;
-	}
-
-	/**
-	 * Determine the name of the listener method that is supposed to handle the given message.
-	 * <p>
-	 * The default implementation simply returns the configured default listener method, if any.
+	 * The default implementation first consults the
+	 * {@link #setQueueOrTagToMethodName(Map) queueOrTagToMethodName} map looking for a
+	 * match on the consumer queue or consumer tag; if no match found, it simply returns
+	 * the configured default listener method, or "handleMessage" if not configured.
 	 * @param originalMessage the Rabbit request message
-	 * @param extractedMessage the converted Rabbit request message, to be passed into the listener method as argument
+	 * @param extractedMessage the converted Rabbit request message, to be passed into the
+	 * listener method as argument
 	 * @return the name of the listener method (never <code>null</code>)
 	 * @throws Exception if thrown by Rabbit API methods
 	 * @see #setDefaultListenerMethod
+	 * @see #setQueueOrTagToMethodName
 	 */
 	protected String getListenerMethodName(Message originalMessage, Object extractedMessage) throws Exception {
+		if (this.queueOrTagToMethodName.size() > 0) {
+			MessageProperties props = originalMessage.getMessageProperties();
+			String methodName = this.queueOrTagToMethodName.get(props.getConsumerQueue());
+			if (methodName == null) {
+				methodName = this.queueOrTagToMethodName.get(props.getConsumerTag());
+			}
+			if (methodName != null) {
+				return methodName;
+			}
+		}
 		return getDefaultListenerMethod();
 	}
 
@@ -415,19 +348,21 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 	 * a distinct method argument)
 	 */
 	protected Object[] buildListenerArguments(Object extractedMessage) {
-		return new Object[] { extractedMessage };
+		return new Object[] {extractedMessage};
 	}
 
 	/**
 	 * Invoke the specified listener method.
 	 * @param methodName the name of the listener method
 	 * @param arguments the message arguments to be passed in
+	 * @param originalMessage the original message
 	 * @return the result returned from the listener method
 	 * @throws Exception if thrown by Rabbit API methods
 	 * @see #getListenerMethodName
 	 * @see #buildListenerArguments
 	 */
-	protected Object invokeListenerMethod(String methodName, Object[] arguments) throws Exception {
+	protected Object invokeListenerMethod(String methodName, Object[] arguments, Message originalMessage)
+			throws Exception {
 		try {
 			MethodInvoker methodInvoker = new MethodInvoker();
 			methodInvoker.setTargetObject(getDelegate());
@@ -435,157 +370,28 @@ public class MessageListenerAdapter implements MessageListener, ChannelAwareMess
 			methodInvoker.setArguments(arguments);
 			methodInvoker.prepare();
 			return methodInvoker.invoke();
-		} catch (InvocationTargetException ex) {
+		}
+		catch (InvocationTargetException ex) {
 			Throwable targetEx = ex.getTargetException();
 			if (targetEx instanceof IOException) {
 				throw new AmqpIOException((IOException) targetEx);
-			} else {
-				throw new ListenerExecutionFailedException("Listener method '" + methodName + "' threw exception",
-						targetEx);
 			}
-		} catch (Throwable ex) {
+			else {
+				throw new ListenerExecutionFailedException("Listener method '" + methodName + "' threw exception",
+						targetEx, originalMessage);
+			}
+		}
+		catch (Exception ex) {
 			ArrayList<String> arrayClass = new ArrayList<String>();
 			if (arguments != null) {
-				for (int i = 0; i < arguments.length; i++) {
-					arrayClass.add(arguments[i].getClass().toString());
+				for (Object argument : arguments) {
+					arrayClass.add(argument.getClass().toString());
 				}
 			}
 			throw new ListenerExecutionFailedException("Failed to invoke target method '" + methodName
 					+ "' with argument type = [" + StringUtils.collectionToCommaDelimitedString(arrayClass)
-					+ "], value = [" + ObjectUtils.nullSafeToString(arguments) + "]", ex);
+					+ "], value = [" + ObjectUtils.nullSafeToString(arguments) + "]", ex, originalMessage);
 		}
-	}
-
-	/**
-	 * Handle the given result object returned from the listener method, sending a response message back.
-	 * @param result the result object to handle (never <code>null</code>)
-	 * @param request the original request message
-	 * @param channel the Rabbit channel to operate on (may be <code>null</code>)
-	 * @throws Exception if thrown by Rabbit API methods
-	 * @see #buildMessage
-	 * @see #postProcessResponse
-	 * @see #getReplyToAddress(Message)
-	 * @see #sendResponse
-	 */
-	protected void handleResult(Object result, Message request, Channel channel) throws Exception {
-		if (channel != null) {
-			if (logger.isDebugEnabled()) {
-				logger.debug("Listener method returned result [" + result + "] - generating response message for it");
-			}
-			Message response = buildMessage(channel, result);
-			postProcessResponse(request, response);
-			Address replyTo = getReplyToAddress(request);
-			sendResponse(channel, replyTo, response);
-		} else if (logger.isWarnEnabled()) {
-			logger.warn("Listener method returned result [" + result
-					+ "]: not generating response message for it because of no Rabbit Channel given");
-		}
-	}
-
-	protected String getReceivedExchange(Message request) {
-		return request.getMessageProperties().getReceivedExchange();
-	}
-
-	/**
-	 * Build a Rabbit message to be sent as response based on the given result object.
-	 * @param session the Rabbit Channel to operate on
-	 * @param result the content of the message, as returned from the listener method
-	 * @return the Rabbit <code>Message</code> (never <code>null</code>)
-	 * @throws Exception if thrown by Rabbit API methods
-	 * @see #setMessageConverter
-	 */
-	protected Message buildMessage(Channel session, Object result) throws Exception {
-		MessageConverter converter = getMessageConverter();
-		if (converter != null) {
-			return converter.toMessage(result, new MessageProperties());
-		} else {
-			if (!(result instanceof Message)) {
-				throw new MessageConversionException("No MessageConverter specified - cannot handle message [" + result
-						+ "]");
-			}
-			return (Message) result;
-		}
-	}
-
-	/**
-	 * Post-process the given response message before it will be sent.
-	 * <p>
-	 * The default implementation sets the response's correlation id to the request message's correlation id, if any;
-	 * otherwise to the request message id.
-	 * @param request the original incoming Rabbit message
-	 * @param response the outgoing Rabbit message about to be sent
-	 * @throws Exception if thrown by Rabbit API methods
-	 */
-	protected void postProcessResponse(Message request, Message response) throws Exception {
-		byte[] correlation = request.getMessageProperties().getCorrelationId();
-
-		if (correlation == null) {
-			String messageId = request.getMessageProperties().getMessageId();
-			if (messageId != null) {
-				correlation = messageId.getBytes(SimpleMessageConverter.DEFAULT_CHARSET);
-			}
-		}
-		response.getMessageProperties().setCorrelationId(correlation);
-	}
-
-	/**
-	 * Determine a reply-to Address for the given message.
-	 * <p>
-	 * The default implementation first checks the Rabbit Reply-To Address of the supplied request; if that is not
-	 * <code>null</code> it is returned; if it is <code>null</code>, then the configured default response Exchange and
-	 * routing key are used to construct a reply-to Address. If the responseExchange property is also <code>null</code>,
-	 * then an {@link AmqpException} is thrown.
-	 * @param request the original incoming Rabbit message
-	 * @return the reply-to Address (never <code>null</code>)
-	 * @throws Exception if thrown by Rabbit API methods
-	 * @throws AmqpException if no {@link Address} can be determined
-	 * @see #setResponseExchange(String)
-	 * @see #setResponseRoutingKey(String)
-	 * @see org.springframework.amqp.core.Message#getMessageProperties()
-	 * @see org.springframework.amqp.core.MessageProperties#getReplyTo()
-	 */
-	protected Address getReplyToAddress(Message request) throws Exception {
-		Address replyTo = request.getMessageProperties().getReplyToAddress();
-		if (replyTo == null) {
-			if (this.responseExchange == null) {
-				throw new AmqpException(
-						"Cannot determine ReplyTo message property value: "
-								+ "Request message does not contain reply-to property, and no default response Exchange was set.");
-			}
-			replyTo = new Address(null, this.responseExchange, this.responseRoutingKey);
-		}
-		return replyTo;
-	}
-
-	/**
-	 * Send the given response message to the given destination.
-	 * @param channel the Rabbit channel to operate on
-	 * @param replyTo the Rabbit ReplyTo string to use when sending. Currently interpreted to be the routing key.
-	 * @param message the Rabbit message to send
-	 * @throws Exception if thrown by Rabbit API methods
-	 * @see #postProcessResponse(Message, Message)
-	 */
-	protected void sendResponse(Channel channel, Address replyTo, Message message) throws Exception {
-		postProcessChannel(channel, message);
-
-		try {
-			logger.debug("Publishing response to exchanage = [" + replyTo.getExchangeName() + "], routingKey = ["
-					+ replyTo.getRoutingKey() + "]");
-			channel.basicPublish(replyTo.getExchangeName(), replyTo.getRoutingKey(), this.mandatoryPublish,
-					this.immediatePublish, this.messagePropertiesConverter.fromMessageProperties(message.getMessageProperties(), encoding), message.getBody());
-		} catch (Exception ex) {
-			throw RabbitUtils.convertRabbitAccessException(ex);
-		}
-	}
-
-	/**
-	 * Post-process the given message producer before using it to send the response.
-	 * <p>
-	 * The default implementation is empty.
-	 * @param response the outgoing Rabbit message about to be sent
-	 * @throws Exception if thrown by Rabbit API methods
-	 */
-	protected void postProcessChannel(Channel channel, Message response) throws Exception {
 	}
 
 }
